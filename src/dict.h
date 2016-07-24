@@ -5,6 +5,12 @@
  * tables of power of two in size are used, collisions are handled by
  * chaining. See the source code for more information... :)
  *
+ * 这个文件实现了一个内存哈希表，它支持插入、删除、替换和获取随机元素等操作。
+ *
+ * 哈希表会自动在表的大小和二次方之间进行调整。
+ *
+ * 键的冲突通过链表来解决。
+ *
  * Copyright (c) 2006-2012, Salvatore Sanfilippo <antirez at gmail dot com>
  * All rights reserved.
  *
@@ -38,6 +44,10 @@
 #ifndef __DICT_H
 #define __DICT_H
 
+/*
+ *字典的操作状态
+ */
+// 操作成功
 #define DICT_OK 0
 #define DICT_ERR 1
 
