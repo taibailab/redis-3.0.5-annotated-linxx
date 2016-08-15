@@ -224,22 +224,50 @@ typedef void (dictScanFunction)(void *privdata, const dictEntry *de);
 #define dictIsRehashing(d) ((d)->rehashidx != -1)
 
 /* API */
+/*
+ * 作用：创建一个新的字典
+ * 时间复杂度：O(1)
+ */
 dict *dictCreate(dictType *type, void *privDataPtr);
 int dictExpand(dict *d, unsigned long size);
+/*
+ * 作用：将给定的键值对添加到字典里面
+ * 时间复杂度：O(1)
+ */
 int dictAdd(dict *d, void *key, void *val);
 dictEntry *dictAddRaw(dict *d, void *key);
+/*
+ * 作用：将给定的键值对添加到字典里面，如果键已经存在于字典，那么用新值取代原有的值
+ * 时间复杂度：O(1)
+ */
 int dictReplace(dict *d, void *key, void *val);
 dictEntry *dictReplaceRaw(dict *d, void *key);
+/*
+ * 作用：从字典中删除给定键所对应的键值对
+ * 时间复杂度：O(1)
+ */
 int dictDelete(dict *d, const void *key);
 int dictDeleteNoFree(dict *d, const void *key);
+/*
+ * 作用：释放给定字典，以及字典中包含的所有键值对
+ * 时间复杂度：O(N)，N为字典包含的键值对数量
+ */
 void dictRelease(dict *d);
 dictEntry * dictFind(dict *d, const void *key);
+/*
+ * 作用：返回给定键的值
+ * 时间复杂度：O(1)
+ */
 void *dictFetchValue(dict *d, const void *key);
 int dictResize(dict *d);
 dictIterator *dictGetIterator(dict *d);
 dictIterator *dictGetSafeIterator(dict *d);
 dictEntry *dictNext(dictIterator *iter);
 void dictReleaseIterator(dictIterator *iter);
+/*
+ * 作用：从字典中随机返回一个键值对
+ * 时间复杂度：O(1)
+ */
 dictEntry *dictGetRandomKey(dict *d);
 unsigned int dictGetSomeKeys(dict *d, dictEntry **des, unsigned int count);
 void dictPrintStats(dict *d);
