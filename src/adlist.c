@@ -140,6 +140,7 @@ list *listAddNodeHead(list *list, void *value)
  * 将一个包含有给定值指针value的新节点添加到链表的表尾
  *
  * 如果为新节点分配内存出错，那么不执行任何动作，仅返回NULL
+ * 如果执行成功，返回传入的链表指针
  *
  * T = O(1)
  */

@@ -70,6 +70,8 @@ struct redisServer server; /* server global state */
 
 /* Our command table.
  *
+ * 命令表
+ *
  * Every entry is composed of the following fields:
  *
  * name: a string representing the command name.
