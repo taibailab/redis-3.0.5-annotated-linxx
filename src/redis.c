@@ -74,49 +74,105 @@ struct redisServer server; /* server global state */
  *
  * Every entry is composed of the following fields:
  *
+ * 表中的每个项都由以下域组成：
+ *
  * name: a string representing the command name.
+ * 		   命令的名字
+ *
  * function: pointer to the C function implementing the command.
+ * 			   一个指向命令的实现函数的指针
+ *
  * arity: number of arguments, it is possible to use -N to say >= N
+ * 		     参数的数量。可以用-N表示>=N
+ *
  * sflags: command flags as string. See below for a table of flags.
+ * 		        字符串形式的FLAG，用来计算以下的真实FLAG
+ *
  * flags: flags as bitmask. Computed by Redis using the 'sflags' field.
+ * 		     位掩码形式的FLAG，根据sflags的字符串计算得出
+ *
  * get_keys_proc: an optional function to get key arguments from a command.
  *                This is only used when the following three fields are not
  *                enough to specify what arguments are keys.
+ *                一个可选的函数，用于从命令中取出key参数，仅在以下三个参数都不足以表示key参数时使用
+ *
  * first_key_index: first argument that is a key
+ * 					第一个key参数的位置
+ *
  * last_key_index: last argument that is a key
+ * 				        最后一个key参数的位置
+ *
  * key_step: step to get all the keys from first to last argument. For instance
  *           in MSET the step is two since arguments are key,val,key,val,...
+ *           从first参数和last参数之间，所有key的步数(step)
+ *           比如说，MSET命令的格式为MSET key value [key value ...]
+ *           它的step就为2
+ *
  * microseconds: microseconds of total execution time for this command.
+ * 				  执行这个命令耗费的总微秒数
+ *
  * calls: total number of calls of this command.
+ * 		     命令被执行的总次数
  *
  * The flags, microseconds and calls fields are computed by Redis and should
  * always be set to zero.
+ * microseconds和call由Redis计算，总是初始化为0。
  *
  * Command flags are expressed using strings where every character represents
  * a flag. Later the populateCommandTable() function will take care of
  * populating the real 'flags' field using this characters.
+ * 命令的FLAG首先由SFLAG域设置，之后populateCommandTable()函数从sflags属性中计算出真正的FLAG到flags属性中。
  *
  * This is the meaning of the flags:
+ * 以下是各个FLAG的意义：
  *
  * w: write command (may modify the key space).
+ * 	     写入命令，可能会修改key space
+ *
  * r: read command  (will never modify the key space).
+ * 	     读命令，不修改key space
  * m: may increase memory usage once called. Don't allow if out of memory.
+ * 	     可能会占用大量内存的命令，调用时对内存占用进行检查
+ *
  * a: admin command, like SAVE or SHUTDOWN.
+ * 	     管理用途的命令，比如SAVE和SHUTDOWN
+ *
  * p: Pub/Sub related command.
+ * 	     发布/订阅相关的命令
+ *
  * f: force replication of this command, regardless of server.dirty.
+ * 	     无视server.dirty，强制复制这个命令。
+ *
  * s: command not allowed in scripts.
+ * 	     不允许在脚本中使用的命令
+ *
  * R: random command. Command is not deterministic, that is, the same command
  *    with the same arguments, with the same key space, may have different
  *    results. For instance SPOP and RANDOMKEY are two random commands.
+ *    随机命令。
+ *    命令是非确定性的：对于同样的命令，同样的参数，同样的键，结果可能不同。
+ *    比如SPOP和RANDOMKEY就是这样的例子。
+ *
  * S: Sort command output array if called from script, so that the output
  *    is deterministic.
+ *    如果命令在Lua脚本中执行，那么对输出进行排序，从而得出确定性的输出。
+ *
  * l: Allow command while loading the database.
+ * 	     允许在载入数据库时使用的命令。
+ *
  * t: Allow command while a slave has stale data but is not allowed to
  *    server this data. Normally no command is accepted in this condition
  *    but just a few.
+ *    允许在附属节点带有过期数据时执行的命令。
+ *    这类命令很少有，只有几个。
+ *
  * M: Do not automatically propagate the command on MONITOR.
+ * 	     不要在MONITOR模式下自动广播的命令。
+ *
  * k: Perform an implicit ASKING for this command, so the command will be
  *    accepted in cluster mode if the slot is marked as 'importing'.
+ *    为这个命令执行一个显示的ASKING，使得在集群模式下，一个被标示为importing的槽可以接收这命令。
+ *
  * F: Fast command: O(1) or O(log(N)) command that should never delay
  *    its execution as long as the kernel scheduler is giving us time.
  *    Note that commands that may trigger a DEL as a side effect (like SET)
@@ -380,6 +436,8 @@ err:
 }
 
 /* Return the UNIX time in microseconds */
+// 返回微秒格式的UNIX时间
+// 1 秒 = 1 000 000 微秒
 long long ustime(void) {
     struct timeval tv;
     long long ust;
@@ -391,6 +449,8 @@ long long ustime(void) {
 }
 
 /* Return the UNIX time in milliseconds */
+// 返回毫秒格式的UNIX时间
+// 1 秒 = 1 000 毫秒
 long long mstime(void) {
     return ustime()/1000;
 }
@@ -661,6 +721,8 @@ int htNeedsResize(dict *dict) {
 
 /* If the percentage of used slots in the HT reaches REDIS_HT_MINFILL
  * we resize the hash table to save memory */
+// 如果字典的使用率比REDIS_HT_MINFILL常量要低
+// 那么通过缩小字典的体积来节约内存
 void tryResizeHashTables(int dbid) {
     if (htNeedsResize(server.db[dbid].dict))
         dictResize(server.db[dbid].dict);
@@ -673,8 +735,13 @@ void tryResizeHashTables(int dbid) {
  * table will use two tables for a long time. So we try to use 1 millisecond
  * of CPU time at every call of this function to perform some rehahsing.
  *
+ * 虽然服务器在对数据库执行读取/写入命令时会对数据库进行渐进式rehash，但如果服务器长期没有执行命令的话，数据库字典的rehash就可能一直没办法完成，为了防止出现这种
+ * 情况，我们需要对数据库执行主动rehash。
+ *
  * The function returns 1 if some rehashing was performed, otherwise 0
- * is returned. */
+ * is returned.
+ * 函数在执行了主动rehash时返回1，否则返回0。
+ */
 int incrementallyRehash(int dbid) {
     /* Keys dictionary */
     if (dictIsRehashing(server.db[dbid].dict)) {
@@ -708,27 +775,41 @@ void updateDictResizePolicy(void) {
  * This function will try to expire the key that is stored in the hash table
  * entry 'de' of the 'expires' hash table of a Redis database.
  *
+ * activeExpireCycle()函数使用的检查键是否过期的辅助函数。
+ *
  * If the key is found to be expired, it is removed from the database and
  * 1 is returned. Otherwise no operation is performed and 0 is returned.
+ *
+ * 如果de中的键已经过期，那么移除它，并返回1，否则不做动作，并返回0。
  *
  * When a key is expired, server.stat_expiredkeys is incremented.
  *
  * The parameter 'now' is the current time in milliseconds as is passed
- * to the function to avoid too many gettimeofday() syscalls. */
+ * to the function to avoid too many gettimeofday() syscalls.
+ *
+ * 参数now是毫秒格式的当前时间
+ */
 int activeExpireCycleTryExpire(redisDb *db, dictEntry *de, long long now) {
+	// 获取键的过期时间
     long long t = dictGetSignedIntegerVal(de);
     if (now > t) {
+    	// 键已过期
         sds key = dictGetKey(de);
         robj *keyobj = createStringObject(key,sdslen(key));
 
+        // 传播过期命令
         propagateExpire(db,keyobj);
+        // 从数据库中删除改键
         dbDelete(db,keyobj);
+        // 发送事件
         notifyKeyspaceEvent(REDIS_NOTIFY_EXPIRED,
             "expired",keyobj,db->id);
         decrRefCount(keyobj);
+        // 更新计数器
         server.stat_expiredkeys++;
         return 1;
     } else {
+    	// 键未过期
         return 0;
     }
 }
@@ -738,50 +819,78 @@ int activeExpireCycleTryExpire(redisDb *db, dictEntry *de, long long now) {
  * it will get more aggressive to avoid that too much memory is used by
  * keys that can be removed from the keyspace.
  *
+ * 函数尝试删除数据库中已经过期的键。
+ * 当带有过期时间的键比较少时，函数运行的比较保守，如果带有过期时间的键比较多，那么函数会以更积极地方式来删除过期键，从而可能地释放被过期键占用的内存。
+ *
  * No more than REDIS_DBCRON_DBS_PER_CALL databases are tested at every
  * iteration.
+ *
+ * 每次循环中被测试的数据库数目不会超过REDIS_DBCRON_DBS_PER_CALL。
  *
  * This kind of call is used when Redis detects that timelimit_exit is
  * true, so there is more work to do, and we do it more incrementally from
  * the beforeSleep() function of the event loop.
  *
+ * 如果timelimit_exit为真，那么说明还有更多删除工作要做，那么在beforeSleep()函数调用时，程序会再次执行这个函数。
+ *
  * Expire cycle type:
+ *
+ * 过期循环的类型：
  *
  * If type is ACTIVE_EXPIRE_CYCLE_FAST the function will try to run a
  * "fast" expire cycle that takes no longer than EXPIRE_FAST_CYCLE_DURATION
  * microseconds, and is not repeated again before the same amount of time.
  *
+ * 如果循环的类型为ACTIVE_EXPIRE_CYCLE_FAST，那么函数会以“快速过期”模式运行，执行的时间不会长过EXPIRE_FAST_CYCLE_DURATION毫秒，并且在
+ * EXPIRE_FAST_CYCLE_DURATION毫秒之内不会再重新执行。
+ *
  * If type is ACTIVE_EXPIRE_CYCLE_SLOW, that normal expire cycle is
  * executed, where the time limit is a percentage of the REDIS_HZ period
- * as specified by the REDIS_EXPIRELOOKUPS_TIME_PERC define. */
+ * as specified by the REDIS_EXPIRELOOKUPS_TIME_PERC define.
+ *
+ * 如果循环的类型为ACTIVE_EXPIRE_CYCLE_SLOW，那么函数会以“正常过期”模式执行，函数的执行时限为REDIS_HS常量的一个百分比，这个百分比由
+ * REDIS_EXPIRELOOKUPS_TIME_PERC定义。
+ */
 
 void activeExpireCycle(int type) {
     /* This function has some global state in order to continue the work
      * incrementally across calls. */
+	// 静态变量，用来累积函数连续执行时的数据
     static unsigned int current_db = 0; /* Last DB tested. */
     static int timelimit_exit = 0;      /* Time limit hit in previous call? */
     static long long last_fast_cycle = 0; /* When last fast cycle ran. */
 
     int j, iteration = 0;
+    // 默认每次处理的数据库数量
     int dbs_per_call = REDIS_DBCRON_DBS_PER_CALL;
+    // 函数开始的时间
     long long start = ustime(), timelimit;
 
+    // 快速模式
     if (type == ACTIVE_EXPIRE_CYCLE_FAST) {
         /* Don't start a fast cycle if the previous cycle did not exited
          * for time limt. Also don't repeat a fast cycle for the same period
          * as the fast cycle total duration itself. */
+    	// 如果上次函数没有触发timelimit_exit，那么不执行处理
         if (!timelimit_exit) return;
+        // 如果距离上次执行未够一定时间，那么不执行处理
         if (start < last_fast_cycle + ACTIVE_EXPIRE_CYCLE_FAST_DURATION*2) return;
+        // 运行到这里，说明执行快速处理，记录当前时间
         last_fast_cycle = start;
     }
 
     /* We usually should test REDIS_DBCRON_DBS_PER_CALL per iteration, with
      * two exceptions:
      *
+     * 一般情况下，函数只处理REDIS_DBCRON_DBS_PER_CALL个数据库，除非：
+     *
      * 1) Don't test more DBs than we have.
+     * 	     当前数据库的数量小于REDIS_DBCRON_DBS_PER_CALL
      * 2) If last time we hit the time limit, we want to scan all DBs
      * in this iteration, as there is work to do in some DB and we don't want
-     * expired keys to use memory for too much time. */
+     * expired keys to use memory for too much time.
+     * 	     如果上次处理遇到了时间上限，那么这次需要对所有数据库进行扫描，这可以避免过多的过期键占用空间
+     */
     if (dbs_per_call > server.dbnum || timelimit_exit)
         dbs_per_call = server.dbnum;
 
@@ -789,20 +898,29 @@ void activeExpireCycle(int type) {
      * per iteration. Since this function gets called with a frequency of
      * server.hz times per second, the following is the max amount of
      * microseconds we can spend in this function. */
+    // 函数处理的微秒时间上限
+    // ACTIVE_EXPIRE_CYCLE_SLOW_TIME_PERC默认为25，也即是25%的CPU时间
     timelimit = 1000000*ACTIVE_EXPIRE_CYCLE_SLOW_TIME_PERC/server.hz/100;
     timelimit_exit = 0;
     if (timelimit <= 0) timelimit = 1;
 
+    // 如果是运行在快速模式之下
+    // 那么最多只能运行FAST_DURATION微秒
+    // 默认值为1000(微秒)
     if (type == ACTIVE_EXPIRE_CYCLE_FAST)
         timelimit = ACTIVE_EXPIRE_CYCLE_FAST_DURATION; /* in microseconds. */
 
+    // 遍历数据库
     for (j = 0; j < dbs_per_call; j++) {
         int expired;
+        // 指向要处理的数据库
         redisDb *db = server.db+(current_db % server.dbnum);
 
         /* Increment the DB now so we are sure if we run out of time
          * in the current DB we'll restart from the next. This allows to
          * distribute the time evenly across DBs. */
+        // 为DB计数器加一，如果进入do循环之后因为超时而跳出
+        // 那么下次会直接从下个DB开始处理
         current_db++;
 
         /* Continue to expire if at the end of the cycle more than 25%
@@ -813,62 +931,95 @@ void activeExpireCycle(int type) {
             int ttl_samples;
 
             /* If there is nothing to expire try next DB ASAP. */
+            // 获取数据库中带过期时间的键的数量
+            // 如果该数量为0，直接跳过这个数据库
             if ((num = dictSize(db->expires)) == 0) {
                 db->avg_ttl = 0;
                 break;
             }
+            // 获取数据库中键值对的数量
             slots = dictSlots(db->expires);
+            // 当前时间
             now = mstime();
 
             /* When there are less than 1% filled slots getting random
              * keys is expensive, so stop here waiting for better times...
              * The dictionary will be resized asap. */
+            // 这个数据库的使用率低于1%，扫描起来太费力了(大部分都会MISS)
+            // 跳过，等待字典收缩程序运行
             if (num && slots > DICT_HT_INITIAL_SIZE &&
                 (num*100/slots < 1)) break;
 
             /* The main collection cycle. Sample random keys among keys
-             * with an expire set, checking for expired ones. */
+             * with an expire set, checking for expired ones.
+             *
+             * 样本计数器
+             */
+            // 已处理过期键计数器
             expired = 0;
+            // 键的总TTL计数器
             ttl_sum = 0;
+            // 总共处理的键计数器
             ttl_samples = 0;
 
+            // 每次最多只能LOOKUPS_PER_LOOP个键
             if (num > ACTIVE_EXPIRE_CYCLE_LOOKUPS_PER_LOOP)
                 num = ACTIVE_EXPIRE_CYCLE_LOOKUPS_PER_LOOP;
 
+            // 开始遍历数据库
             while (num--) {
                 dictEntry *de;
                 long long ttl;
 
+                // 从expires中随机取出一个带带过期时间的键
                 if ((de = dictGetRandomKey(db->expires)) == NULL) break;
+                // 计算TTL
                 ttl = dictGetSignedIntegerVal(de)-now;
+                // 如果键已经过期，那么删除它，并将expired计数器增一
                 if (activeExpireCycleTryExpire(db,de,now)) expired++;
                 if (ttl < 0) ttl = 0;
+                // 累计键的TTL
                 ttl_sum += ttl;
+                // 累积处理键的个数
                 ttl_samples++;
             }
 
             /* Update the average TTL stats for this database. */
+            // 为这个数据库更新平均TTL统计数据
             if (ttl_samples) {
+            	// 计算当前平均值
                 long long avg_ttl = ttl_sum/ttl_samples;
 
+                // 如果这是第一次设置数据库平均TTL，那么进行初始化
                 if (db->avg_ttl == 0) db->avg_ttl = avg_ttl;
                 /* Smooth the value averaging with the previous one. */
+                // 取数据库的上次平均TTL和今次平均TTL的平均值
                 db->avg_ttl = (db->avg_ttl+avg_ttl)/2;
             }
 
             /* We can't block forever here even if there are many keys to
              * expire. So after a given amount of milliseconds return to the
              * caller waiting for the other active expire cycle. */
+            // 我们不能用太长时间处理过期键，所以这个函数执行一定时间之后就要返回
+
+            // 更新遍历次数
             iteration++;
+            // 每遍历16次执行一次
             if ((iteration & 0xf) == 0) { /* check once every 16 iterations. */
                 long long elapsed = ustime()-start;
 
                 latencyAddSampleIfNeeded("expire-cycle",elapsed/1000);
+                // 如果遍历次数正好是16的倍数
+                // 并且遍历的时间超过了timelimit
+                // 那么断开timelimit_exit
                 if (elapsed > timelimit) timelimit_exit = 1;
             }
+            // 已经超时了，返回
             if (timelimit_exit) return;
             /* We don't repeat the cycle if there are less than 25% of keys
              * found expired in the current DB. */
+            // 如果已删除的过期键占当前总数据库带过期时间的键数量的25%
+            // 那么不再遍历
         } while (expired > ACTIVE_EXPIRE_CYCLE_LOOKUPS_PER_LOOP/4);
     }
 }
@@ -878,47 +1029,68 @@ unsigned int getLRUClock(void) {
 }
 
 /* Add a sample to the operations per second array of samples. */
+// 将服务器的命令执行次数记录到抽样数组中
 void trackInstantaneousMetric(int metric, long long current_reading) {
+	// 计算两次抽样之间的时间长度，毫秒格式
     long long t = mstime() - server.inst_metric[metric].last_sample_time;
+    // 计算两次抽样之间，执行了多少个命令
     long long ops = current_reading -
                     server.inst_metric[metric].last_sample_count;
     long long ops_sec;
 
+    // 计算距离上一次抽样之后，每秒执行命令的数量
     ops_sec = t > 0 ? (ops*1000/t) : 0;
 
+    // 将计算出的执行命令数量保存到抽样数组
     server.inst_metric[metric].samples[server.inst_metric[metric].idx] =
         ops_sec;
     server.inst_metric[metric].idx++;
+    // 更新抽样数组的索引
     server.inst_metric[metric].idx %= REDIS_METRIC_SAMPLES;
+    // 更新最后一次抽样的时间
     server.inst_metric[metric].last_sample_time = mstime();
+    // 更新最后一次抽样时的执行命令数量
     server.inst_metric[metric].last_sample_count = current_reading;
 }
 
 /* Return the mean of all the samples. */
+// 根据所有取样信息，计算服务器最近一秒执行命令数的平均值
 long long getInstantaneousMetric(int metric) {
     int j;
     long long sum = 0;
 
+    // 计算所有取样值的总和
     for (j = 0; j < REDIS_METRIC_SAMPLES; j++)
         sum += server.inst_metric[metric].samples[j];
+    // 计算取样的平均值
     return sum / REDIS_METRIC_SAMPLES;
 }
 
 /* Check for timeouts. Returns non-zero if the client was terminated.
+ * 检查客户端是否已经超时，如果超时就关闭客户端，并返回1；否则返回0。
+ *
  * The function gets the current time in milliseconds as argument since
  * it gets called multiple times in a loop, so calling gettimeofday() for
  * each iteration would be costly without any actual gain. */
 int clientsCronHandleTimeout(redisClient *c, mstime_t now_ms) {
+	// 获取最新的当前系统时间
     time_t now = now_ms/1000;
 
+    // 服务器设置了maxidletime时间
     if (server.maxidletime &&
+    		// 不检查作为从服务器的客户端
         !(c->flags & REDIS_SLAVE) &&    /* no timeout for slaves */
+		// 不检查作为主服务器的客户端
         !(c->flags & REDIS_MASTER) &&   /* no timeout for masters */
+		// 不检查被阻塞的客户端
         !(c->flags & REDIS_BLOCKED) &&  /* no timeout for BLPOP */
+		// 不检查订阅了模式的客户端
         !(c->flags & REDIS_PUBSUB) &&   /* no timeout for Pub/Sub clients */
+		// 客户端最后一次与服务器通讯的时间已经超过了maxidletime时间
         (now - c->lastinteraction > server.maxidletime))
     {
         redisLog(REDIS_VERBOSE,"Closing idle client");
+        // 关闭超时客户端
         freeClient(c);
         return 1;
     } else if (c->flags & REDIS_BLOCKED) {
@@ -926,9 +1098,13 @@ int clientsCronHandleTimeout(redisClient *c, mstime_t now_ms) {
          * However note that the actual resolution is limited by
          * server.hz. */
 
+    	// 检查被BLPOP等命令阻塞的客户端的阻塞时间是否已经到达
+    	// 如果是的话，取消客户端的阻塞
         if (c->bpop.timeout != 0 && c->bpop.timeout < now_ms) {
             /* Handle blocking operation specific timeout. */
+        	// 向客户端返回空回复
             replyToBlockedClientTimedOut(c);
+            // 取消客户端的阻塞状态
             unblockClient(c);
         } else if (server.cluster_enabled) {
             /* Cluster: handle unblock & redirect of clients blocked
@@ -937,20 +1113,33 @@ int clientsCronHandleTimeout(redisClient *c, mstime_t now_ms) {
                 unblockClient(c);
         }
     }
+    // 客户端没有被关闭
     return 0;
 }
 
 /* The client query buffer is an sds.c string that can end with a lot of
  * free space not used, this function reclaims space if needed.
  *
- * The function always returns 0 as it never terminates the client. */
+ * 根据情况，缩小查询缓冲区的大小。
+ *
+ * The function always returns 0 as it never terminates the client.
+ *
+ * 函数总是返回0，因为它不会终止客户端。
+ */
 int clientsCronResizeQueryBuffer(redisClient *c) {
     size_t querybuf_size = sdsAllocSize(c->querybuf);
     time_t idletime = server.unixtime - c->lastinteraction;
 
     /* There are two conditions to resize the query buffer:
+     *
+     * 符合以下两个条件的话，执行大小调整：
+     *
      * 1) Query buffer is > BIG_ARG and too big for latest peak.
-     * 2) Client is inactive and the buffer is bigger than 1k. */
+     * 	     查询缓冲区的大小大于BIG_ARG以及querybuf_peak
+     *
+     * 2) Client is inactive and the buffer is bigger than 1k.
+     * 	     客户端不活跃，并且缓冲区大于1k。
+     */
     if (((querybuf_size > REDIS_MBULK_BIG_ARG) &&
          (querybuf_size/(c->querybuf_peak+1)) > 2) ||
          (querybuf_size > 1024 && idletime > 2))
@@ -962,6 +1151,7 @@ int clientsCronResizeQueryBuffer(redisClient *c) {
     }
     /* Reset the peak again to capture the peak memory usage in the next
      * cycle. */
+    // 重置峰值
     c->querybuf_peak = 0;
     return 0;
 }
@@ -971,14 +1161,27 @@ void clientsCron(void) {
     /* Make sure to process at least numclients/server.hz of clients
      * per call. Since this function is called server.hz times per second
      * we are sure that in the worst case we process all the clients in 1
-     * second. */
+     * second.
+     *
+     * 这个函数每次执行都会处理至少numclients/server.hz个客户端。因为这个函数每秒钟会调用server.hz次，所以在最坏情况下，服务器需要使用1秒钟来遍历所有客户端。
+     * (在一般情况下，遍历所有客户端所需的时间会比实际中短很多。)
+     */
+	// 客户端数量
     int numclients = listLength(server.clients);
+    // 要处理的客户端数量
     int iterations = numclients/server.hz;
+    // 返回毫秒格式的UNIX时间
     mstime_t now = mstime();
 
     /* Process at least a few clients while we are at it, even if we need
      * to process less than CLIENTS_CRON_MIN_ITERATIONS to meet our contract
-     * of processing each client once per second. */
+     * of processing each client once per second.
+     *
+     * 过程中至少有几个客户，而我们是在它，即使我们需要处理不超过5，以满足我们的每秒处理每个客户一次合同。(Reference Google Translate)
+     * 过程至少有几个客户在我们,即使我们需要处理少于5来满足我们的合同的处理每个客户一次每秒。(Reference Youdao Translate)
+     */
+
+	// 至少要处理5个客户端
     if (iterations < CLIENTS_CRON_MIN_ITERATIONS)
         iterations = (numclients < CLIENTS_CRON_MIN_ITERATIONS) ?
                      numclients : CLIENTS_CRON_MIN_ITERATIONS;
@@ -990,13 +1193,17 @@ void clientsCron(void) {
         /* Rotate the list, take the current head, process.
          * This way if the client must be removed from the list it's the
          * first element and we don't incur into O(N) computation. */
+        // 翻转列表，然后取出表头元素，这样一来上一个被处理的客户端会被放到表头
+        // 另外，如果程序要删除当前客户端，那么只要删除表头元素就可以了
         listRotate(server.clients);
         head = listFirst(server.clients);
         c = listNodeValue(head);
         /* The following functions do different service checks on the client.
          * The protocol is that they return non-zero if the client was
          * terminated. */
+        // 检查客户端，并在客户端超时时关闭它
         if (clientsCronHandleTimeout(c,now)) continue;
+        // 根据情况，缩小客户端查询缓冲区的大小
         if (clientsCronResizeQueryBuffer(c)) continue;
     }
 }
@@ -1004,15 +1211,21 @@ void clientsCron(void) {
 /* This function handles 'background' operations we are required to do
  * incrementally in Redis databases, such as active key expiring, resizing,
  * rehashing. */
+// 对数据库执行删除过期键，调整大小，以及主动和渐进式rehash
 void databasesCron(void) {
+	// 函数先从数据库中删除过期键，然后再对数据库的大小进行修改
+
     /* Expire keys by random sampling. Not required for slaves
      * as master will synthesize DELs for us. */
+	// 如果服务器不是从服务器，那么执行主动过期键清除
     if (server.active_expire_enabled && server.masterhost == NULL)
+    	// 清除模式为CYCLE_SLOW，这个模式会尽量多清除过期键
         activeExpireCycle(ACTIVE_EXPIRE_CYCLE_SLOW);
 
     /* Perform hash tables rehashing if needed, but only if there are no
      * other processes saving the DB on disk. Otherwise rehashing is bad
      * as will cause a lot of copy-on-write of memory pages. */
+    // 在没有BGSAVE或者BGREWRITEOF执行时，对哈希表进行rehash
     if (server.rdb_child_pid == -1 && server.aof_child_pid == -1) {
         /* We use global counters so if we stop the computation at a given
          * DB we'll be able to start from the successive in the next
@@ -1023,15 +1236,18 @@ void databasesCron(void) {
         int j;
 
         /* Don't test more DBs than we have. */
+        // 设定要测试的数据库数量
         if (dbs_per_call > server.dbnum) dbs_per_call = server.dbnum;
 
         /* Resize */
+        // 调整字典的大小
         for (j = 0; j < dbs_per_call; j++) {
             tryResizeHashTables(resize_db % server.dbnum);
             resize_db++;
         }
 
         /* Rehash */
+        // 对字典进行渐进式rehash
         if (server.activerehashing) {
             for (j = 0; j < dbs_per_call; j++) {
                 int work_done = incrementallyRehash(rehash_db % server.dbnum);
@@ -1056,22 +1272,45 @@ void updateCachedTime(void) {
 }
 
 /* This is our timer interrupt, called server.hz times per second.
+ *
+ * 这是Redis的时间中断器，每秒调用server.hz次。
+ *
  * Here is where we do a number of things that need to be done asynchronously.
  * For instance:
  *
+ * 以下是需要异步执行的操作：
+ *
  * - Active expired keys collection (it is also performed in a lazy way on
  *   lookup).
+ *   主动清除过期键。
+ *
  * - Software watchdog.
+ * 	   更新软件watchdog的信息。
+ *
  * - Update some statistic.
+ * 	  更新统计信息。
+ *
  * - Incremental rehashing of the DBs hash tables.
+ * 	   对数据库进行渐增式Rehash
+ *
  * - Triggering BGSAVE / AOF rewrite, and handling of terminated children.
+ * 	   触发BGSAVE或者AOF重写，并处理之后由BGSAVE和AOF重写引发的子进程停止。
+ *
  * - Clients timeout of different kinds.
+ * 	   处理客户端超时
+ *
  * - Replication reconnection.
+ * 	  复制重连
+ *
  * - Many more...
+ * 	  等等...
  *
  * Everything directly called here will be called server.hz times per second,
  * so in order to throttle execution of things we want to do less frequently
  * a macro is used: run_with_period(milliseconds) { .... }
+ *
+ * 因为serverCron函数中的所有代码都会每秒调用server.hz次，为了对部分代码的调用次数进行限制，使用了一个宏run_with_period(milliseconds) { .... }，这个宏可以将被
+ * 包含代码的执行次数降低为milliseconds次
  */
 
 int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
@@ -1087,6 +1326,7 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
     /* Update the time cache. */
     updateCachedTime();
 
+    // 记录服务器执行命令的次数
     run_with_period(100) {
         trackInstantaneousMetric(REDIS_METRIC_COMMAND,server.stat_numcommands);
         trackInstantaneousMetric(REDIS_METRIC_NET_INPUT,
@@ -1104,11 +1344,18 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
      * touched for all the time needed to the counter to wrap, which is
      * not likely.
      *
+     * 即使服务器的时间最终比1.5年长也无所谓，对象系统仍会正常运作，不过一些对象可能会比服务器本身的时钟更年轻。
+     * 不过这要这个对象在1.5年内都没有被访问过，才会出现这种现象。
+     *
      * Note that you can change the resolution altering the
-     * REDIS_LRU_CLOCK_RESOLUTION define. */
+     * REDIS_LRU_CLOCK_RESOLUTION define.
+     *
+     * LRU时间的精度可以通过修改REDIS_LRU_CLOCK_RESOLUTION常量来改变。
+     */
     server.lruclock = getLRUClock();
 
     /* Record the max memory used since the server was started. */
+    // 记录服务器的内存峰值
     if (zmalloc_used_memory() > server.stat_peak_memory)
         server.stat_peak_memory = zmalloc_used_memory();
 
@@ -1117,20 +1364,28 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
 
     /* We received a SIGTERM, shutting down here in a safe way, as it is
      * not ok doing so inside the signal handler. */
+    // 服务器进程收到SIGTERM信号，关闭服务器
     if (server.shutdown_asap) {
+    	// 尝试关闭服务器
         if (prepareForShutdown(0) == REDIS_OK) exit(0);
+        // 如果关闭失败，那么打印LOG，并移除关闭标识
         redisLog(REDIS_WARNING,"SIGTERM received but errors trying to shut down the server, check the logs for more information");
         server.shutdown_asap = 0;
     }
 
     /* Show some info about non-empty databases */
+    // 打印数据库的键值对信息
     run_with_period(5000) {
         for (j = 0; j < server.dbnum; j++) {
             long long size, used, vkeys;
 
+            // 可用键值对的数量
             size = dictSlots(server.db[j].dict);
+            // 已用键值对的数量
             used = dictSize(server.db[j].dict);
+            // 带有过期时间的键值对数量
             vkeys = dictSize(server.db[j].expires);
+            // 用LOG打印数量
             if (used || vkeys) {
                 redisLog(REDIS_VERBOSE,"DB %d: %lld keys (%lld volatile) in %lld slots HT.",j,used,vkeys,size);
                 /* dictPrintStats(server.dict); */
@@ -1139,6 +1394,7 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
     }
 
     /* Show information about connected clients */
+    // 如果服务器没有运行在SENTINEL模式下，那么打印客户端的连接信息
     if (!server.sentinel_mode) {
         run_with_period(5000) {
             redisLog(REDIS_VERBOSE,
@@ -1150,13 +1406,17 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
     }
 
     /* We need to do a few operations on clients asynchronously. */
+    // 检查客户端，关闭超时客户端，并释放客户端多余的缓冲区
     clientsCron();
 
     /* Handle background operations on Redis databases. */
+    // 对数据库执行各种操作
     databasesCron();
 
     /* Start a scheduled AOF rewrite if this was requested by the user while
      * a BGSAVE was in progress. */
+    // 如果BGSAVE和BGREWRITEAOF都没有在进行
+    // 并且有一个BGREWRITEAOF在等待，那么执行BGREWRITEAOF
     if (server.rdb_child_pid == -1 && server.aof_child_pid == -1 &&
         server.aof_rewrite_scheduled)
     {
@@ -1164,18 +1424,22 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
     }
 
     /* Check if a background saving or AOF rewrite in progress terminated. */
+    // 检查BGSAVE或者BGREWRITEAOF是否已经执行完毕
     if (server.rdb_child_pid != -1 || server.aof_child_pid != -1) {
         int statloc;
         pid_t pid;
 
+        // 接收子进程发来的信号，非阻塞
         if ((pid = wait3(&statloc,WNOHANG,NULL)) != 0) {
             int exitcode = WEXITSTATUS(statloc);
             int bysignal = 0;
 
             if (WIFSIGNALED(statloc)) bysignal = WTERMSIG(statloc);
 
+            // BGSAVE执行完毕
             if (pid == server.rdb_child_pid) {
                 backgroundSaveDoneHandler(exitcode,bysignal);
+            // BGREWRITEAOF执行完毕
             } else if (pid == server.aof_child_pid) {
                 backgroundRewriteDoneHandler(exitcode,bysignal);
             } else {
@@ -1188,6 +1452,9 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
     } else {
         /* If there is not a background saving/rewrite in progress check if
          * we have to save/rewrite now */
+    	// 既然没有BGSAVE或者BGREWRITEAOF在进行，那么检查是否需要执行它们
+
+    	// 遍历所有保存条件，看是否需要执行BGSAVE命令
          for (j = 0; j < server.saveparamslen; j++) {
             struct saveparam *sp = server.saveparams+j;
 
@@ -1195,6 +1462,7 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
              * the given amount of seconds, and if the latest bgsave was
              * successful or if, in case of an error, at least
              * REDIS_BGSAVE_RETRY_DELAY seconds already elapsed. */
+            // 检查是否有某个保存条件已经满足了
             if (server.dirty >= sp->changes &&
                 server.unixtime-server.lastsave > sp->seconds &&
                 (server.unixtime-server.lastbgsave_try >
@@ -1203,28 +1471,36 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
             {
                 redisLog(REDIS_NOTICE,"%d changes in %d seconds. Saving...",
                     sp->changes, (int)sp->seconds);
+                // 执行BGSAVE
                 rdbSaveBackground(server.rdb_filename);
                 break;
             }
          }
 
          /* Trigger an AOF rewrite if needed */
+         // 触发BGREWRITEAOF
          if (server.rdb_child_pid == -1 &&
              server.aof_child_pid == -1 &&
              server.aof_rewrite_perc &&
+			 // AOF文件的当前大小大于执行BGREWRITEAOF所需的最小大小
              server.aof_current_size > server.aof_rewrite_min_size)
          {
+        	 // 上一次完成AOF写入之后，AOF文件的大小
             long long base = server.aof_rewrite_base_size ?
                             server.aof_rewrite_base_size : 1;
+            // AOF文件当前的体积相对于base的体积的百分比
             long long growth = (server.aof_current_size*100/base) - 100;
+            // 如果增长体积的百分比超过了growth，那么执行BGREWRITEAOF
             if (growth >= server.aof_rewrite_perc) {
                 redisLog(REDIS_NOTICE,"Starting automatic rewriting of AOF on %lld%% growth",growth);
+                // 执行BGREWRITEAOF
                 rewriteAppendOnlyFileBackground();
             }
          }
     }
 
 
+   // 根据AOF政策，考虑是否需要将AOF缓冲区中的内容写入到AOF文件中
     /* AOF postponed flush: Try at every cron cycle if the slow fsync
      * completed. */
     if (server.aof_flush_postponed_start) flushAppendOnlyFile(0);
@@ -1239,6 +1515,7 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
     }
 
     /* Close clients that need to be closed asynchronous */
+    // 关闭那些需要异步关闭的客户端
     freeClientsInAsyncFreeQueue();
 
     /* Clear the paused clients flag if needed. */
@@ -1246,23 +1523,29 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
 
     /* Replication cron function -- used to reconnect to master and
      * to detect transfer failures. */
+    // 复制函数
+    // 重连接主服务器、向主服务器发送ACK、判断数据发送失败情况、断开本服务器超时的从服务器，等等
     run_with_period(1000) replicationCron();
 
     /* Run the Redis Cluster cron. */
+    // 如果服务器运行在集群模式下，那么执行集群操作
     run_with_period(100) {
         if (server.cluster_enabled) clusterCron();
     }
 
     /* Run the Sentinel timer if we are in sentinel mode. */
+    // 如果服务器运行在SENTINEL模式下，那么执行SENTINEL的主函数
     run_with_period(100) {
         if (server.sentinel_mode) sentinelTimer();
     }
 
     /* Cleanup expired MIGRATE cached sockets. */
+    // 集群...TODO
     run_with_period(1000) {
         migrateCloseTimedoutSockets();
     }
 
+    // 增加loop计数器
     server.cronloops++;
     return 1000/server.hz;
 }
@@ -1270,6 +1553,7 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
 /* This function gets called every time Redis is entering the
  * main loop of the event driven library, that is, before to sleep
  * for ready file descriptors. */
+// 每次处理事件之前执行
 void beforeSleep(struct aeEventLoop *eventLoop) {
     REDIS_NOTUSED(eventLoop);
 
@@ -1277,10 +1561,12 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
      * may change the state of Redis Cluster (from ok to fail or vice versa),
      * so it's a good idea to call it before serving the unblocked clients
      * later in this function. */
+    // 在进入下个事件循环前，执行一些集群收尾工作
     if (server.cluster_enabled) clusterBeforeSleep();
 
     /* Run a fast expire cycle (the called function will return
      * ASAP if a fast cycle is not needed). */
+    // 执行一次快速的主动过期检查
     if (server.active_expire_enabled && server.masterhost == NULL)
         activeExpireCycle(ACTIVE_EXPIRE_CYCLE_FAST);
 
@@ -1309,6 +1595,7 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
         processUnblockedClients();
 
     /* Write the AOF buffer on disk */
+    // 将AOF缓冲区的内容写入到AOF文件
     flushAppendOnlyFile(0);
 }
 
@@ -1317,6 +1604,7 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
 void createSharedObjects(void) {
     int j;
 
+    // 常用回复
     shared.crlf = createObject(REDIS_STRING,sdsnew("\r\n"));
     shared.ok = createObject(REDIS_STRING,sdsnew("+OK\r\n"));
     shared.err = createObject(REDIS_STRING,sdsnew("-ERR\r\n"));
@@ -1330,6 +1618,7 @@ void createSharedObjects(void) {
     shared.pong = createObject(REDIS_STRING,sdsnew("+PONG\r\n"));
     shared.queued = createObject(REDIS_STRING,sdsnew("+QUEUED\r\n"));
     shared.emptyscan = createObject(REDIS_STRING,sdsnew("*2\r\n$1\r\n0\r\n*0\r\n"));
+    // 常用错误回复
     shared.wrongtypeerr = createObject(REDIS_STRING,sdsnew(
         "-WRONGTYPE Operation against a key holding the wrong kind of value\r\n"));
     shared.nokeyerr = createObject(REDIS_STRING,sdsnew(
@@ -1362,10 +1651,12 @@ void createSharedObjects(void) {
         "-NOREPLICAS Not enough good slaves to write.\r\n"));
     shared.busykeyerr = createObject(REDIS_STRING,sdsnew(
         "-BUSYKEY Target key name already exists.\r\n"));
+    // 常用字符
     shared.space = createObject(REDIS_STRING,sdsnew(" "));
     shared.colon = createObject(REDIS_STRING,sdsnew(":"));
     shared.plus = createObject(REDIS_STRING,sdsnew("+"));
 
+    // 常用SELECT命令
     for (j = 0; j < REDIS_SHARED_SELECT_CMDS; j++) {
         char dictid_str[64];
         int dictid_len;
@@ -1376,20 +1667,24 @@ void createSharedObjects(void) {
                 "*2\r\n$6\r\nSELECT\r\n$%d\r\n%s\r\n",
                 dictid_len, dictid_str));
     }
+    // 发布与订阅的有关回复
     shared.messagebulk = createStringObject("$7\r\nmessage\r\n",13);
     shared.pmessagebulk = createStringObject("$8\r\npmessage\r\n",14);
     shared.subscribebulk = createStringObject("$9\r\nsubscribe\r\n",15);
     shared.unsubscribebulk = createStringObject("$11\r\nunsubscribe\r\n",18);
     shared.psubscribebulk = createStringObject("$10\r\npsubscribe\r\n",17);
     shared.punsubscribebulk = createStringObject("$12\r\npunsubscribe\r\n",19);
+    // 常用命令
     shared.del = createStringObject("DEL",3);
     shared.rpop = createStringObject("RPOP",4);
     shared.lpop = createStringObject("LPOP",4);
     shared.lpush = createStringObject("LPUSH",5);
+    // 常用整数
     for (j = 0; j < REDIS_SHARED_INTEGERS; j++) {
         shared.integers[j] = createObject(REDIS_STRING,(void*)(long)j);
         shared.integers[j]->encoding = REDIS_ENCODING_INT;
     }
+    // 常用长度bulk或者multi bulk回复
     for (j = 0; j < REDIS_SHARED_BULKHDR_LEN; j++) {
         shared.mbulkhdr[j] = createObject(REDIS_STRING,
             sdscatprintf(sdsempty(),"*%d\r\n",j));
@@ -1407,11 +1702,19 @@ void createSharedObjects(void) {
 void initServerConfig(void) {
     int j;
 
+    // 服务器状态
+
+    // 设置服务器的运行ID
     getRandomHexChars(server.runid,REDIS_RUN_ID_SIZE);
+    // 设置默认配置文件路径
     server.configfile = NULL;
+    // 设置默认服务器频率
     server.hz = REDIS_DEFAULT_HZ;
+    // 为运行ID加上结尾符号
     server.runid[REDIS_RUN_ID_SIZE] = '\0';
+    // 设置服务器的运行架构
     server.arch_bits = (sizeof(long) == 8) ? 64 : 32;
+    // 设置默认服务器端口号
     server.port = REDIS_SERVERPORT;
     server.tcp_backlog = REDIS_TCP_BACKLOG;
     server.bindaddr_count = 0;
@@ -1490,13 +1793,16 @@ void initServerConfig(void) {
     server.next_client_id = 1; /* Client IDs, start from 1 .*/
     server.loading_process_events_interval_bytes = (1024*1024*2);
 
+    // 初始化LRU时间
     server.lruclock = getLRUClock();
     resetServerSaveParams();
 
+    // 初始化并设置保存条件
     appendServerSaveParams(60*60,1);  /* save after 1 hour and 1 change */
     appendServerSaveParams(300,100);  /* save after 5 minutes and 100 changes */
     appendServerSaveParams(60,10000); /* save after 1 minute and 10000 changes */
     /* Replication related */
+    // 初始化和复制相关的状态
     server.masterauth = NULL;
     server.masterhost = NULL;
     server.masterport = 6379;
@@ -1515,6 +1821,7 @@ void initServerConfig(void) {
     server.master_repl_offset = 0;
 
     /* Replication partial resync backlog */
+    // 初始化PSYNC命令所使用的backlog
     server.repl_backlog = NULL;
     server.repl_backlog_size = REDIS_DEFAULT_REPL_BACKLOG_SIZE;
     server.repl_backlog_histlen = 0;
@@ -1524,10 +1831,12 @@ void initServerConfig(void) {
     server.repl_no_slaves_since = time(NULL);
 
     /* Client output buffer limits */
+    // 设置客户端的输出到缓冲区限制
     for (j = 0; j < REDIS_CLIENT_TYPE_COUNT; j++)
         server.client_obuf_limits[j] = clientBufferLimitsDefaults[j];
 
     /* Double constants initialization */
+    // 初始化浮点常量
     R_Zero = 0.0;
     R_PosInf = 1.0/R_Zero;
     R_NegInf = -1.0/R_Zero;
@@ -1536,6 +1845,8 @@ void initServerConfig(void) {
     /* Command table -- we initiialize it here as it is part of the
      * initial configuration, since command names may be changed via
      * redis.conf using the rename-command directive. */
+    // 初始化命令表
+    // 在这里初始化是因为接下来读取.conf文件时可能会用到这些命令
     server.commands = dictCreate(&commandTableDictType,NULL);
     server.orig_commands = dictCreate(&commandTableDictType,NULL);
     populateCommandTable();
@@ -1546,6 +1857,7 @@ void initServerConfig(void) {
     server.rpopCommand = lookupCommandByCString("rpop");
 
     /* Slow log */
+    // 初始化慢查询日志
     server.slowlog_log_slower_than = REDIS_SLOWLOG_LOG_SLOWER_THAN;
     server.slowlog_max_len = REDIS_SLOWLOG_MAX_LEN;
 
@@ -1553,6 +1865,7 @@ void initServerConfig(void) {
     server.latency_monitor_threshold = REDIS_DEFAULT_LATENCY_MONITOR_THRESHOLD;
 
     /* Debugging */
+    // 初始化调试项
     server.assert_failed = "<no assertion failed>";
     server.assert_file = "<no file>";
     server.assert_line = 0;
@@ -1756,15 +2069,18 @@ void resetServerStats(void) {
 void initServer(void) {
     int j;
 
+    // 设置信号处理函数
     signal(SIGHUP, SIG_IGN);
     signal(SIGPIPE, SIG_IGN);
     setupSignalHandlers();
 
+    // 设置syslog
     if (server.syslog_enabled) {
         openlog(server.syslog_ident, LOG_PID | LOG_NDELAY | LOG_NOWAIT,
             server.syslog_facility);
     }
 
+    // 初始化并创建数据结构
     server.pid = getpid();
     server.current_client = NULL;
     server.clients = listCreate();
@@ -1778,17 +2094,20 @@ void initServer(void) {
     server.get_ack_from_slaves = 0;
     server.clients_paused = 0;
 
+    // 创建共享对象
     createSharedObjects();
     adjustOpenFilesLimit();
     server.el = aeCreateEventLoop(server.maxclients+REDIS_EVENTLOOP_FDSET_INCR);
     server.db = zmalloc(sizeof(redisDb)*server.dbnum);
 
     /* Open the TCP listening socket for the user commands. */
+    // 打开TCP监听端口，用于等待客户端的命令请求
     if (server.port != 0 &&
         listenToPort(server.port,server.ipfd,&server.ipfd_count) == REDIS_ERR)
         exit(1);
 
     /* Open the listening Unix domain socket. */
+    // 打开UNIX本地端口
     if (server.unixsocket != NULL) {
         unlink(server.unixsocket); /* don't care if this fails */
         server.sofd = anetUnixServer(server.neterr,server.unixsocket,
@@ -1807,6 +2126,7 @@ void initServer(void) {
     }
 
     /* Create the Redis databases, and initialize other internal state. */
+    // 创建并初始化数据库结构
     for (j = 0; j < server.dbnum; j++) {
         server.db[j].dict = dictCreate(&dbDictType,NULL);
         server.db[j].expires = dictCreate(&keyptrDictType,NULL);
@@ -1817,6 +2137,7 @@ void initServer(void) {
         server.db[j].id = j;
         server.db[j].avg_ttl = 0;
     }
+    // 创建PUBSUB相关结构
     server.pubsub_channels = dictCreate(&keylistDictType,NULL);
     server.pubsub_patterns = listCreate();
     listSetFreeMethod(server.pubsub_patterns,freePubsubPattern);
@@ -1845,6 +2166,7 @@ void initServer(void) {
 
     /* Create the serverCron() time event, that's our main way to process
      * background operations. */
+    // 为serverCron()创建时间事件
     if(aeCreateTimeEvent(server.el, 1, serverCron, NULL, NULL) == AE_ERR) {
         redisPanic("Can't create the serverCron time event.");
         exit(1);
@@ -1852,6 +2174,8 @@ void initServer(void) {
 
     /* Create an event handler for accepting new connections in TCP and Unix
      * domain sockets. */
+    // 为TCP连接关联连接应答(accept)处理器
+    // 用于接受并应答客户端的connect()调用
     for (j = 0; j < server.ipfd_count; j++) {
         if (aeCreateFileEvent(server.el, server.ipfd[j], AE_READABLE,
             acceptTcpHandler,NULL) == AE_ERR)
@@ -1860,10 +2184,12 @@ void initServer(void) {
                     "Unrecoverable error creating server.ipfd file event.");
             }
     }
+    // 为本地套接字关联应答处理器
     if (server.sofd > 0 && aeCreateFileEvent(server.el,server.sofd,AE_READABLE,
         acceptUnixHandler,NULL) == AE_ERR) redisPanic("Unrecoverable error creating server.sofd file event.");
 
     /* Open the AOF file if needed. */
+    // 如果AOF持久化功能已经打开，那么打开或创建一个AOF文件
     if (server.aof_state == REDIS_AOF_ON) {
         server.aof_fd = open(server.aof_filename,
                                O_WRONLY|O_APPEND|O_CREAT,0644);
@@ -1878,31 +2204,44 @@ void initServer(void) {
      * no explicit limit in the user provided configuration we set a limit
      * at 3 GB using maxmemory with 'noeviction' policy'. This avoids
      * useless crashes of the Redis instance for out of memory. */
+    // 对于32位实例来说，默认将最大可用内存限制在3GB
     if (server.arch_bits == 32 && server.maxmemory == 0) {
         redisLog(REDIS_WARNING,"Warning: 32 bit instance detected but no memory limit set. Setting 3 GB maxmemory limit with 'noeviction' policy now.");
         server.maxmemory = 3072LL*(1024*1024); /* 3 GB */
         server.maxmemory_policy = REDIS_MAXMEMORY_NO_EVICTION;
     }
 
+    // 如果服务器以cluster模式打开，那么初始化cluster
     if (server.cluster_enabled) clusterInit();
+    // 初始化复制功能有关的脚本缓存
     replicationScriptCacheInit();
+    // 初始化脚本系统
     scriptingInit();
+    // 初始化慢查询功能
     slowlogInit();
     latencyMonitorInit();
+    // 初始化BIO系统
     bioInit();
 }
 
 /* Populates the Redis Command Table starting from the hard coded list
- * we have on top of redis.c file. */
+ * we have on top of redis.c file.
+ *
+ * 根据redis.c文件顶部的命令列表，创建命令表
+ */
 void populateCommandTable(void) {
     int j;
+    // 命令的数量
     int numcommands = sizeof(redisCommandTable)/sizeof(struct redisCommand);
 
     for (j = 0; j < numcommands; j++) {
+    	// 指定命令
         struct redisCommand *c = redisCommandTable+j;
+        // 取出字符串FLAG
         char *f = c->sflags;
         int retval1, retval2;
 
+        // 根据字符串FLAG生成实际FLAG
         while(*f != '\0') {
             switch(*f) {
             case 'w': c->flags |= REDIS_CMD_WRITE; break;
@@ -1923,14 +2262,23 @@ void populateCommandTable(void) {
             f++;
         }
 
+        // 将命令关联到命令表
         retval1 = dictAdd(server.commands, sdsnew(c->name), c);
         /* Populate an additional dictionary that will be unaffected
-         * by rename-command statements in redis.conf. */
+         * by rename-command statements in redis.conf.
+         *
+         * 将命令也关联到原始命令表
+         *
+         * 原始命令表不会受redis.conf中命令改名的影响
+         */
         retval2 = dictAdd(server.orig_commands, sdsnew(c->name), c);
         redisAssert(retval1 == DICT_OK && retval2 == DICT_OK);
     }
 }
 
+/*
+ * 重置命令表中的统计信息
+ */
 void resetCommandTableStats(void) {
     int numcommands = sizeof(redisCommandTable)/sizeof(struct redisCommand);
     int j;
@@ -1938,7 +2286,9 @@ void resetCommandTableStats(void) {
     for (j = 0; j < numcommands; j++) {
         struct redisCommand *c = redisCommandTable+j;
 
+        // 清零时间
         c->microseconds = 0;
+        // 清零调用次数
         c->calls = 0;
     }
 }
@@ -1982,10 +2332,16 @@ void redisOpArrayFree(redisOpArray *oa) {
 
 /* ====================== Commands lookup and execution ===================== */
 
+/*
+ * 根据给定命令名字(SDS)，查找命令
+ */
 struct redisCommand *lookupCommand(sds name) {
     return dictFetchValue(server.commands, name);
 }
 
+/*
+ * 根据给定命令名字(C字符串)，查找命令
+ */
 struct redisCommand *lookupCommandByCString(char *s) {
     struct redisCommand *cmd;
     sds name = sdsnew(s);
@@ -1999,12 +2355,20 @@ struct redisCommand *lookupCommandByCString(char *s) {
  * the original table containing the original command names unaffected by
  * redis.conf rename-command statement.
  *
+ * 从当前命令表server.commands中查找给定名字，如果没找到的话，就尝试从server.orig_commands中查找未被改名的原始名字
+ * 原始表中的命令名不受redis.conf中命令改名的影响
+ *
  * This is used by functions rewriting the argument vector such as
  * rewriteClientCommandVector() in order to set client->cmd pointer
- * correctly even if the command was renamed. */
+ * correctly even if the command was renamed.
+ *
+ * 这个函数可以在命令被更名之后，仍然在重写命令时得出正确的名字。
+ */
 struct redisCommand *lookupCommandOrOriginal(sds name) {
+	// 查找当前表
     struct redisCommand *cmd = dictFetchValue(server.commands, name);
 
+    // 如果有需要的话，查找原始表
     if (!cmd) cmd = dictFetchValue(server.orig_commands,name);
     return cmd;
 }
@@ -2012,16 +2376,27 @@ struct redisCommand *lookupCommandOrOriginal(sds name) {
 /* Propagate the specified command (in the context of the specified database id)
  * to AOF and Slaves.
  *
+ * 将指定命令(以及执行该命令的上下文，比如数据库id等信息)传播到AOF和slave。
+ *
  * flags are an xor between:
+ * FLAG可以是以下标识的xor：
+ *
  * + REDIS_PROPAGATE_NONE (no propagation of command at all)
+ * 	   不传播
+ *
  * + REDIS_PROPAGATE_AOF (propagate into the AOF file if is enabled)
+ * 	  传播到AOF
+ *
  * + REDIS_PROPAGATE_REPL (propagate into the replication link)
+ * 	   传播到slave
  */
 void propagate(struct redisCommand *cmd, int dbid, robj **argv, int argc,
                int flags)
 {
+	// 传播到AOF
     if (server.aof_state != REDIS_AOF_OFF && flags & REDIS_PROPAGATE_AOF)
         feedAppendOnlyFile(cmd,dbid,argv,argc);
+    // 传播到slave
     if (flags & REDIS_PROPAGATE_REPL)
         replicationFeedSlaves(server.slaves,dbid,argv,argc);
 }
@@ -2043,12 +2418,16 @@ void forceCommandPropagation(redisClient *c, int flags) {
 }
 
 /* Call() is the core of Redis execution of a command */
+// 调用命令的实现函数，执行命令
 void call(redisClient *c, int flags) {
+	// start记录命令开始执行的时间
     long long dirty, start, duration;
+    // 记录命令开始执行前的FLAG
     int client_old_flags = c->flags;
 
     /* Sent the command to clients in MONITOR mode, only if the commands are
      * not generated from reading an AOF. */
+    // 如果可以的话，将命令发送到MONITOR
     if (listLength(server.monitors) &&
         !server.loading &&
         !(c->cmd->flags & (REDIS_CMD_SKIP_MONITOR|REDIS_CMD_ADMIN)))
@@ -2059,21 +2438,29 @@ void call(redisClient *c, int flags) {
     /* Call the command. */
     c->flags &= ~(REDIS_FORCE_AOF|REDIS_FORCE_REPL);
     redisOpArrayInit(&server.also_propagate);
+    // 保留旧dirty计算器值
     dirty = server.dirty;
+    // 计算命令开始执行的时间
     start = ustime();
+    // 执行实现函数
     c->cmd->proc(c);
+    // 计算命令执行耗费的时间
     duration = ustime()-start;
+    // 计算命令执行之后的dirty值
     dirty = server.dirty-dirty;
     if (dirty < 0) dirty = 0;
 
     /* When EVAL is called loading the AOF we don't want commands called
      * from Lua to go into the slowlog or to populate statistics. */
+    // 不将从Lua中发出的命令放入SLOWLOG，也不进行统计
     if (server.loading && c->flags & REDIS_LUA_CLIENT)
         flags &= ~(REDIS_CALL_SLOWLOG | REDIS_CALL_STATS);
 
     /* If the caller is Lua, we want to force the EVAL caller to propagate
      * the script if the command flag or client flag are forcing the
      * propagation. */
+    // 如果调用者是Lua，那么根据命令FLAG和客户端FLAG
+    // 打开传播(propagate)标志
     if (c->flags & REDIS_LUA_CLIENT && server.lua_caller) {
         if (c->flags & REDIS_FORCE_REPL)
             server.lua_caller->flags |= REDIS_FORCE_REPL;
@@ -2083,23 +2470,29 @@ void call(redisClient *c, int flags) {
 
     /* Log the command into the Slow log if needed, and populate the
      * per-command statistics that we show in INFO commandstats. */
+    // 如果有需要，将命令放到SLOWLOG里面
     if (flags & REDIS_CALL_SLOWLOG && c->cmd->proc != execCommand) {
         char *latency_event = (c->cmd->flags & REDIS_CMD_FAST) ?
                               "fast-command" : "command";
         latencyAddSampleIfNeeded(latency_event,duration/1000);
         slowlogPushEntryIfNeeded(c->argv,c->argc,duration);
     }
+    // 更新命令的统计信息
     if (flags & REDIS_CALL_STATS) {
         c->cmd->microseconds += duration;
         c->cmd->calls++;
     }
 
     /* Propagate the command into the AOF and replication link */
+    // 将命令复制到AOF和slave节点
     if (flags & REDIS_CALL_PROPAGATE) {
         int flags = REDIS_PROPAGATE_NONE;
 
+        // 强制REPL传播
         if (c->flags & REDIS_FORCE_REPL) flags |= REDIS_PROPAGATE_REPL;
+        // 强制AOF传播
         if (c->flags & REDIS_FORCE_AOF) flags |= REDIS_PROPAGATE_AOF;
+        // 如果数据库有被修改，那么启用REPL和AOF传播
         if (dirty)
             flags |= (REDIS_PROPAGATE_REPL | REDIS_PROPAGATE_AOF);
         if (flags != REDIS_PROPAGATE_NONE)
@@ -2108,11 +2501,14 @@ void call(redisClient *c, int flags) {
 
     /* Restore the old FORCE_AOF/REPL flags, since call can be executed
      * recursively. */
+    // 将客户端的FLAG恢复到命令执行之前
+    // 因为call可能会递归执行
     c->flags &= ~(REDIS_FORCE_AOF|REDIS_FORCE_REPL);
     c->flags |= client_old_flags & (REDIS_FORCE_AOF|REDIS_FORCE_REPL);
 
     /* Handle the alsoPropagate() API to handle commands that want to propagate
      * multiple separated commands. */
+    // 传播额外的命令
     if (server.also_propagate.numops) {
         int j;
         redisOp *rop;
@@ -2131,14 +2527,21 @@ void call(redisClient *c, int flags) {
  * processCommand() execute the command or prepare the
  * server for a bulk read from the client.
  *
+ * 这个函数执行时，我们已经读入了一个完整的命令到客户端，这个函数负责执行这个命令，或者服务器准备从客户端中进行一次读取。
+ *
  * If 1 is returned the client is still alive and valid and
  * other operations can be performed by the caller. Otherwise
- * if 0 is returned the client was destroyed (i.e. after QUIT). */
+ * if 0 is returned the client was destroyed (i.e. after QUIT).
+ *
+ * 如果这个函数返回1，那么表示客户端在执行命令之后仍然存在，调用者可以继续执行其他操作。
+ * 否则，如果这个函数返回0，那么表示客户端已经被销毁。
+ */
 int processCommand(redisClient *c) {
     /* The QUIT command is handled separately. Normal command procs will
      * go through checking for replication and QUIT will cause trouble
      * when FORCE_REPLICATION is enabled and would be implemented in
      * a regular command proc. */
+	// 特别处理quit命令
     if (!strcasecmp(c->argv[0]->ptr,"quit")) {
         addReply(c,shared.ok);
         c->flags |= REDIS_CLOSE_AFTER_REPLY;
@@ -2147,14 +2550,17 @@ int processCommand(redisClient *c) {
 
     /* Now lookup the command and check ASAP about trivial error conditions
      * such as wrong arity, bad command name and so forth. */
+    // 查找命令，并进行命令合法性检查，以及命令参数个数检查
     c->cmd = c->lastcmd = lookupCommand(c->argv[0]->ptr);
     if (!c->cmd) {
+    	// 没找到指定的命令
         flagTransaction(c);
         addReplyErrorFormat(c,"unknown command '%s'",
             (char*)c->argv[0]->ptr);
         return REDIS_OK;
     } else if ((c->cmd->arity > 0 && c->cmd->arity != c->argc) ||
                (c->argc < -c->cmd->arity)) {
+    	// 参数个数错误
         flagTransaction(c);
         addReplyErrorFormat(c,"wrong number of arguments for '%s' command",
             c->cmd->name);
@@ -2162,6 +2568,7 @@ int processCommand(redisClient *c) {
     }
 
     /* Check if the user is authenticated */
+    // 检查认证信息
     if (server.requirepass && !c->authenticated && c->cmd->proc != authCommand)
     {
         flagTransaction(c);
@@ -2170,9 +2577,19 @@ int processCommand(redisClient *c) {
     }
 
     /* If cluster is enabled perform the cluster redirection here.
+     *
+     * 如果开启了集群模式，那么在这里进行转向操作。
+     *
      * However we don't perform the redirection if:
+     *
+     * 不过，如果有以下情况出现，那么节点不进行转向：
+     *
      * 1) The sender of this command is our master.
-     * 2) The command has no key arguments. */
+     * 	     命令的发送者是本节点的主节点
+     *
+     * 2) The command has no key arguments.
+     * 	     命令没有key参数
+     */
     if (server.cluster_enabled &&
         !(c->flags & REDIS_MASTER) &&
         !(c->flags & REDIS_LUA_CLIENT &&
@@ -2181,18 +2598,23 @@ int processCommand(redisClient *c) {
     {
         int hashslot;
 
+        // 集群已下线
         if (server.cluster->state != REDIS_CLUSTER_OK) {
             flagTransaction(c);
             clusterRedirectClient(c,NULL,0,REDIS_CLUSTER_REDIR_DOWN_STATE);
             return REDIS_OK;
+        // 集群运作正常
         } else {
             int error_code;
             clusterNode *n = getNodeByQuery(c,c->cmd,c->argv,c->argc,&hashslot,&error_code);
+            // 不能执行多键处理命令/命令针对的槽和键不是本节点处理的，进行转向
             if (n == NULL || n != server.cluster->myself) {
                 flagTransaction(c);
                 clusterRedirectClient(c,n,hashslot,error_code);
                 return REDIS_OK;
             }
+            // 如果执行到这里，说明键key所在的槽由本节点处理
+            // 或者客户端执行的是无参数命令
         }
     }
 
@@ -2201,8 +2623,13 @@ int processCommand(redisClient *c) {
      * First we try to free some memory if possible (if there are volatile
      * keys in the dataset). If there are not the only thing we can do
      * is returning an error. */
+    // 如果设置了最大内存，那么检查内存是否超过限制，并做相应的操作
     if (server.maxmemory) {
+    	// 如果内存已超过限制，那么尝试通过删除过期键来释放内存
         int retval = freeMemoryIfNeeded();
+        // 如果即将要执行的命令可能占用大量内存(REDIS_CMD_DENYOOM)
+        // 并且前面的内存释放失败的话
+        // 那么向客户端返回内存错误
         if ((c->cmd->flags & REDIS_CMD_DENYOOM) && retval == REDIS_ERR) {
             flagTransaction(c);
             addReply(c, shared.oomerr);
@@ -2212,6 +2639,8 @@ int processCommand(redisClient *c) {
 
     /* Don't accept write commands if there are problems persisting on disk
      * and if this is a master instance. */
+    // 如果这是一个主服务器，并且这个服务器之前执行BGSAVE时发生了错误
+    // 那么不执行写命令
     if (((server.stop_writes_on_bgsave_err &&
           server.saveparamslen > 0 &&
           server.lastbgsave_status == REDIS_ERR) ||
@@ -2233,6 +2662,8 @@ int processCommand(redisClient *c) {
 
     /* Don't accept write commands if there are not enough good slaves and
      * user configured the min-slaves-to-write option. */
+    // 如果服务器没有足够多的状态良好服务器
+    // 并且min-slaves-to-write选项已打开
     if (server.masterhost == NULL &&
         server.repl_min_slaves_to_write &&
         server.repl_min_slaves_max_lag &&
@@ -2246,6 +2677,7 @@ int processCommand(redisClient *c) {
 
     /* Don't accept write commands if this is a read only slave. But
      * accept write commands if this is our master. */
+    // 如果这个服务器是一个只读slave的话，那么拒绝执行写命令
     if (server.masterhost && server.repl_slave_ro &&
         !(c->flags & REDIS_MASTER) &&
         c->cmd->flags & REDIS_CMD_WRITE)
@@ -2255,6 +2687,7 @@ int processCommand(redisClient *c) {
     }
 
     /* Only allow SUBSCRIBE and UNSUBSCRIBE in the context of Pub/Sub */
+    // 在订阅于发布模式的上下文中，只能执行订阅和退订相关的命令
     if (c->flags & REDIS_PUBSUB &&
         c->cmd->proc != pingCommand &&
         c->cmd->proc != subscribeCommand &&
@@ -2278,12 +2711,14 @@ int processCommand(redisClient *c) {
 
     /* Loading DB? Return an error if the command has not the
      * REDIS_CMD_LOADING flag. */
+    // 如果服务器正在载入数据到数据库，那么只执行带有REDIS_CMD_LOADING标识的命令，否则将出错
     if (server.loading && !(c->cmd->flags & REDIS_CMD_LOADING)) {
         addReply(c, shared.loadingerr);
         return REDIS_OK;
     }
 
     /* Lua script too slow? Only allow a limited number of commands. */
+    // Lua脚本超时，只允许执行限定的操作，比如SHUTDOWN和SCRIPT KILL
     if (server.lua_timedout &&
           c->cmd->proc != authCommand &&
           c->cmd->proc != replconfCommand &&
@@ -2304,11 +2739,16 @@ int processCommand(redisClient *c) {
         c->cmd->proc != execCommand && c->cmd->proc != discardCommand &&
         c->cmd->proc != multiCommand && c->cmd->proc != watchCommand)
     {
+    	// 在事务上下文中
+    	// 除EXEC、DISCARD、MULTI和WATCH命令之外
+    	// 其他所有命令都会被入队到到事务队列中
         queueMultiCommand(c);
         addReply(c,shared.queued);
     } else {
+    	// 执行命令
         call(c,REDIS_CALL_FULL);
         c->woff = server.master_repl_offset;
+        // 处理那些解除了阻塞的键
         if (listLength(server.ready_keys))
             handleClientsBlockedOnLists();
     }
@@ -2319,6 +2759,7 @@ int processCommand(redisClient *c) {
 
 /* Close listening sockets. Also unlink the unix domain socket if
  * unlink_unix_socket is non-zero. */
+// 关闭监听套接字
 void closeListeningSockets(int unlink_unix_socket) {
     int j;
 
@@ -2340,11 +2781,13 @@ int prepareForShutdown(int flags) {
     /* Kill the saving child if there is a background saving in progress.
        We want to avoid race conditions, for instance our saving child may
        overwrite the synchronous saving did by SHUTDOWN. */
+    // 如果有BGSAVE正在执行，那么杀死子进程，避免竞争条件
     if (server.rdb_child_pid != -1) {
         redisLog(REDIS_WARNING,"There is a child saving an .rdb. Killing it!");
         kill(server.rdb_child_pid,SIGUSR1);
         rdbRemoveTempFile(server.rdb_child_pid);
     }
+    // 同理，杀死正在执行BGREWRITEAOF的子进程
     if (server.aof_state != REDIS_AOF_OFF) {
         /* Kill the AOF saving child as the AOF we already have may be longer
          * but contains the full dataset anyway. */
@@ -2361,8 +2804,11 @@ int prepareForShutdown(int flags) {
         }
         /* Append only file: fsync() the AOF and exit */
         redisLog(REDIS_NOTICE,"Calling fsync() on the AOF file.");
+        // 将缓冲区的内容写入到硬盘里面
         aof_fsync(server.aof_fd);
     }
+    // 如果客户端执行的是SHUTDOWN save，或者SAVE功能被打开
+    // 那么执行SAVE操作
     if ((server.saveparamslen > 0 && !nosave) || save) {
         redisLog(REDIS_NOTICE,"Saving the final RDB snapshot before exiting.");
         /* Snapshotting. Perform a SYNC SAVE and exit */
@@ -2376,11 +2822,13 @@ int prepareForShutdown(int flags) {
             return REDIS_ERR;
         }
     }
+    // 移除pidfile文件
     if (server.daemonize) {
         redisLog(REDIS_NOTICE,"Removing the pid file.");
         unlink(server.pidfile);
     }
     /* Close the listening sockets. Apparently this allows faster restarts. */
+    // 关闭监听套接字，这样在重启的时候会快一点
     closeListeningSockets(1);
     redisLog(REDIS_WARNING,"%s is now ready to exit, bye bye...",
         server.sentinel_mode ? "Sentinel" : "Redis");
@@ -3059,10 +3507,14 @@ void infoCommand(redisClient *c) {
 
 void monitorCommand(redisClient *c) {
     /* ignore MONITOR if already slave or in monitor mode */
+	// 这个客户端是从服务器，或者已经是监视器
     if (c->flags & REDIS_SLAVE) return;
 
+    // 打开SLAVE标志和MONITIR标志
     c->flags |= (REDIS_SLAVE|REDIS_MONITOR);
+    // 添加客户端到monitors链表
     listAddNodeTail(server.monitors,c);
+    // 返回OK
     addReply(c,shared.ok);
 }
 
@@ -3072,17 +3524,25 @@ void monitorCommand(redisClient *c) {
  * file to limit the max memory used by the server, before processing a
  * command.
  *
+ * 此函数在maxmemory选项被打开，并且内存超出限制时使用。
+ *
  * The goal of the function is to free enough memory to keep Redis under the
  * configured memory limit.
+ *
+ * 此函数的目的是释放Redis的占用内存至maxmemory选项设置的最大值之下。
  *
  * The function starts calculating how many bytes should be freed to keep
  * Redis under the limit, and enters a loop selecting the best keys to
  * evict accordingly to the configured policy.
  *
+ * 函数先计算出需要释放多少字节才能抵御maxmemory选项设置的最大值，然后根据指定的淘汰算法，选出最适合被淘汰的键进行释放。
+ *
  * If all the bytes needed to return back under the limit were freed the
  * function returns REDIS_OK, otherwise REDIS_ERR is returned, and the caller
  * should block the execution of commands that will result in more memory
  * used by the server.
+ *
+ * 如果成功释放了所需数量的内存，那么函数返回REDIS_OK，否则函数将返回REDIS_ERR，并阻止执行新的命令。
  *
  * ------------------------------------------------------------------------
  *
@@ -3201,6 +3661,9 @@ int freeMemoryIfNeeded(void) {
 
     /* Remove the size of slaves output buffers and AOF buffer from the
      * count of used memory. */
+    // 计算出Redis目前占用的内存总数，但有两个方面的内存不会计算在内：
+    // 1)从服务器的输出缓冲区的内存
+    // 2)AOF缓冲区的内存
     mem_used = zmalloc_used_memory();
     if (slaves) {
         listIter li;
@@ -3222,18 +3685,24 @@ int freeMemoryIfNeeded(void) {
     }
 
     /* Check if we are over the memory limit. */
+    // 如果目前使用的内存大小比设置的maxmemory要小，那么无须执行进一步操作
     if (mem_used <= server.maxmemory) return REDIS_OK;
 
+    // 如果占用内存比maxmemory要大，但是maxmemory策略为不淘汰，那么直接返回
     if (server.maxmemory_policy == REDIS_MAXMEMORY_NO_EVICTION)
         return REDIS_ERR; /* We need to free memory, but policy forbids. */
 
     /* Compute how much memory we need to free. */
+    // 计算需要释放多少字节的内存
     mem_tofree = mem_used - server.maxmemory;
+    // 初始化已释放内存的字节数为0
     mem_freed = 0;
     latencyStartMonitor(latency);
+    // 根据maxmemory策略，遍历字典，释放内存并记录被释放内存的字节数
     while (mem_freed < mem_tofree) {
         int j, k, keys_freed = 0;
 
+        // 遍历所有字典
         for (j = 0; j < server.dbnum; j++) {
             long bestval = 0; /* just to prevent warning */
             sds bestkey = NULL;
@@ -3244,13 +3713,19 @@ int freeMemoryIfNeeded(void) {
             if (server.maxmemory_policy == REDIS_MAXMEMORY_ALLKEYS_LRU ||
                 server.maxmemory_policy == REDIS_MAXMEMORY_ALLKEYS_RANDOM)
             {
+            	// 如果策略是allkeys-lru或者allkeys-random
+            	// 那么淘汰的目标为所有数据库键
                 dict = server.db[j].dict;
             } else {
+            	// 如果策略是volatile-lru、volatile-random或者volatile-ttl
+            	// 那么淘汰的目标为带过期时间的数据库键
                 dict = server.db[j].expires;
             }
+            // 跳过空字典
             if (dictSize(dict) == 0) continue;
 
             /* volatile-random and allkeys-random policy */
+            // 如果使用的是随机策略，那么从目标字典中随机选出键
             if (server.maxmemory_policy == REDIS_MAXMEMORY_ALLKEYS_RANDOM ||
                 server.maxmemory_policy == REDIS_MAXMEMORY_VOLATILE_RANDOM)
             {
@@ -3259,6 +3734,7 @@ int freeMemoryIfNeeded(void) {
             }
 
             /* volatile-lru and allkeys-lru policy */
+            // 如果使用的是LRU策略，那么从一集sample键中选出IDLE时间最长的那个键
             else if (server.maxmemory_policy == REDIS_MAXMEMORY_ALLKEYS_LRU ||
                 server.maxmemory_policy == REDIS_MAXMEMORY_VOLATILE_LRU)
             {
@@ -3295,6 +3771,7 @@ int freeMemoryIfNeeded(void) {
             }
 
             /* volatile-ttl */
+            // 策略为volatile-ttl，从一集sample键中选出过期时间距离当前时间最接近的键
             else if (server.maxmemory_policy == REDIS_MAXMEMORY_VOLATILE_TTL) {
                 for (k = 0; k < server.maxmemory_samples; k++) {
                     sds thiskey;
@@ -3314,6 +3791,7 @@ int freeMemoryIfNeeded(void) {
             }
 
             /* Finally remove the selected key. */
+            // 删除被选中的键
             if (bestkey) {
                 long long delta;
 
@@ -3327,6 +3805,7 @@ int freeMemoryIfNeeded(void) {
                  *
                  * AOF and Output buffer memory will be freed eventually so
                  * we only care about memory used by the key space. */
+                // 计算删除键所释放的内存数量
                 delta = (long long) zmalloc_used_memory();
                 latencyStartMonitor(eviction_latency);
                 dbDelete(db,keyobj);
@@ -3335,6 +3814,7 @@ int freeMemoryIfNeeded(void) {
                 latencyRemoveNestedEvent(latency,eviction_latency);
                 delta -= (long long) zmalloc_used_memory();
                 mem_freed += delta;
+                // 对淘汰键的计数器增一
                 server.stat_evictedkeys++;
                 notifyKeyspaceEvent(REDIS_NOTIFY_EVICTED, "evicted",
                     keyobj, db->id);
@@ -3473,6 +3953,7 @@ void redisAsciiArt(void) {
     zfree(buf);
 }
 
+// SIGTERM信号的处理器
 static void sigShutdownHandler(int sig) {
     char *msg;
 
@@ -3500,6 +3981,7 @@ static void sigShutdownHandler(int sig) {
     }
 
     redisLogFromHandler(REDIS_WARNING, msg);
+    // 打开关闭标识
     server.shutdown_asap = 1;
 }
 
@@ -3541,12 +4023,19 @@ int checkForSentinelMode(int argc, char **argv) {
 
 /* Function called at startup to load RDB or AOF file in memory. */
 void loadDataFromDisk(void) {
+	// 记录开始时间
     long long start = ustime();
+    // AOF持久化已打开？
     if (server.aof_state == REDIS_AOF_ON) {
+    	// 尝试载入AOF文件
         if (loadAppendOnlyFile(server.aof_filename) == REDIS_OK)
+        	// 打印载入信息，并计算载入耗时长度
             redisLog(REDIS_NOTICE,"DB loaded from append only file: %.3f seconds",(float)(ustime()-start)/1000000);
+    // AOF持久化未打开
     } else {
+    	// 尝试载入RDB文件
         if (rdbLoad(server.rdb_filename) == REDIS_OK) {
+        	// 打印载入信息，并计算载入耗时长度
             redisLog(REDIS_NOTICE,"DB loaded from disk: %.3f seconds",
                 (float)(ustime()-start)/1000000);
         } else if (errno != ENOENT) {
@@ -3582,6 +4071,7 @@ int main(int argc, char **argv) {
     struct timeval tv;
 
     /* We need to initialize our libraries, and the server configuration. */
+    // 初始化库
 #ifdef INIT_SETPROCTITLE_REPLACEMENT
     spt_init(argc, argv);
 #endif
@@ -3591,23 +4081,29 @@ int main(int argc, char **argv) {
     srand(time(NULL)^getpid());
     gettimeofday(&tv,NULL);
     dictSetHashFunctionSeed(tv.tv_sec^tv.tv_usec^getpid());
+    // 检查服务器是否以Sentinel模式启动
     server.sentinel_mode = checkForSentinelMode(argc,argv);
+    // 初始化服务器
     initServerConfig();
 
     /* We need to init sentinel right now as parsing the configuration file
      * in sentinel mode will have the effect of populating the sentinel
      * data structures with master nodes to monitor. */
+    // 如果服务器以Sentinel模式启动，那么进行Sentinel功能相关的初始化
+    // 并为要监视的主服务器创建一些相应的数据结构
     if (server.sentinel_mode) {
         initSentinelConfig();
         initSentinel();
     }
 
+    // 检查用户是否指定了配置文件，或者配置选项
     if (argc >= 2) {
         int j = 1; /* First option to parse in argv[] */
         sds options = sdsempty();
         char *configfile = NULL;
 
         /* Handle special options --help and --version */
+        // 处理特殊选项-h、-v和--test-memory
         if (strcmp(argv[1], "-v") == 0 ||
             strcmp(argv[1], "--version") == 0) version();
         if (strcmp(argv[1], "--help") == 0 ||
@@ -3624,12 +4120,16 @@ int main(int argc, char **argv) {
         }
 
         /* First argument is the config file name? */
+        // 如果第一个参数(argv[1])不是以"--"开头
+        // 那么它应该是一个配置文件
         if (argv[j][0] != '-' || argv[j][1] != '-')
             configfile = argv[j++];
         /* All the other options are parsed and conceptually appended to the
          * configuration file. For instance --port 6380 will generate the
          * string "port 6380\n" to be parsed after the actual file name
          * is parsed, if any. */
+        // 对用户给定的其余选项进行分析，并将分析所得的字符串追加稍后载入的配置文件的内容之后
+        // 比如--port 6380会被分析为"port 6380\n"
         while(j != argc) {
             if (argv[j][0] == '-' && argv[j][1] == '-') {
                 /* Option name */
@@ -3650,27 +4150,40 @@ int main(int argc, char **argv) {
                 "Sentinel needs config file on disk to save state.  Exiting...");
             exit(1);
         }
+        // 获取配置文件的绝对路径
         if (configfile) server.configfile = getAbsolutePath(configfile);
+        // 重置保存条件
         resetServerSaveParams();
+        // 载入配置文件，options是前面分析出的给定选项
         loadServerConfig(configfile,options);
         sdsfree(options);
     } else {
         redisLog(REDIS_WARNING, "Warning: no config file specified, using the default config. In order to specify a config file use %s /path/to/%s.conf", argv[0], server.sentinel_mode ? "sentinel" : "redis");
     }
+    // 将服务器设置为守护进程
     if (server.daemonize) daemonize();
+    // 创建并初始化服务器数据结构
     initServer();
+    // 如果服务器是守护进程，那么创建PID文件
     if (server.daemonize) createPidFile();
+    // 为服务器进程设置名字
     redisSetProcTitle(argv[0]);
+    // 打印ASCII LOGO
     redisAsciiArt();
     checkTcpBacklogSettings();
 
+    // 如果服务器不是运行在SENTINEL模式，那么执行以下代码
     if (!server.sentinel_mode) {
         /* Things not needed when running in Sentinel mode. */
+    	// 打印问候语
         redisLog(REDIS_WARNING,"Server started, Redis version " REDIS_VERSION);
     #ifdef __linux__
+        // 打印内存警告
         linuxMemoryWarnings();
     #endif
+        // 从AOF文件或者RDB文件中载入数据
         loadDataFromDisk();
+        // 启动集群？
         if (server.cluster_enabled) {
             if (verifyClusterConfigWithData() == REDIS_ERR) {
                 redisLog(REDIS_WARNING,
@@ -3679,8 +4192,10 @@ int main(int argc, char **argv) {
                 exit(1);
             }
         }
+        // 打印TCP端口
         if (server.ipfd_count > 0)
             redisLog(REDIS_NOTICE,"The server is now ready to accept connections on port %d", server.port);
+        // 打印本地套接字端口
         if (server.sofd > 0)
             redisLog(REDIS_NOTICE,"The server is now ready to accept connections at %s", server.unixsocket);
     } else {
@@ -3688,12 +4203,15 @@ int main(int argc, char **argv) {
     }
 
     /* Warning the user about suspicious maxmemory setting. */
+    // 检查不正常的maxmemory配置
     if (server.maxmemory > 0 && server.maxmemory < 1024*1024) {
         redisLog(REDIS_WARNING,"WARNING: You specified a maxmemory value that is less than 1MB (current value is %llu bytes). Are you sure this is what you really want?", server.maxmemory);
     }
 
+    // 运行事件处理器，一直到服务器关闭为止
     aeSetBeforeSleepProc(server.el,beforeSleep);
     aeMain(server.el);
+    // 服务器关闭，停止事件循环
     aeDeleteEventLoop(server.el);
     return 0;
 }
