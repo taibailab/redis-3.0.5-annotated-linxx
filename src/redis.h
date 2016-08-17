@@ -693,33 +693,37 @@ struct sharedObjectsStruct {
 
 /* ZSETs use a specialized version of Skiplists */
 /*
- * 跳跃表节点
+ * 跳跃表节点(在同一个跳跃表中，各个节点保存的成员对象必须是唯一的，但是多个节点保存的分值却可以是相同的；分值相同的节点将按照成员对象在字典序中的大小来进行排
+ * 序，成员对象较小的节点会排在前面(靠近表头的方向)，而成员对象较大的节点则会排在后面(靠近表尾的方向)。)
  */
 typedef struct zskiplistNode {
-	// 成员对象
+	// 成员对象(是一个指针，指向一个保存SDS值的字符串。)
     robj *obj;
-    // 分值
+    // 分值(是一个double类型的浮点数，节点按各自所保存的分值从小到大排列。)
     double score;
-    // 后退指针
+    // 后退指针(指向位于当前节点的前一个节点。后退指针在程序从表尾向表头遍历时使用。用于从表尾向表头方向方位节点：跟可以一次跳过多个节点的前进指针不同，因为每
+    // 个节点只有一个后退指针，所以每次只能后退至前一个节点。)
     struct zskiplistNode *backward;
-    // 层
+    // 层(当程序从表头向表尾进行遍历时，访问会沿着层的前进指针进行。该数组可以包含多个元素，每个元素都包含一个指向其他节点的指针，程序可以用过这些层来加快方位
+    // 访问节点的速度，一般来说，层的数量越多，方位其他节点的速度就越快。)
     struct zskiplistLevel {
-    	// 前进指针
+    	// 前进指针(用于访问位于表尾方向的其他节点。)
         struct zskiplistNode *forward;
-        // 跨度
+        // 跨度(记录了前进指针所指向节点和当前节点的距离：两个节点之间的跨度越大，它们相距得就越远；指向NULL的所有前进指针的跨度都为0，因为它们没有连向任何节
+        // 点。)
         unsigned int span;
     } level[];
 } zskiplistNode;
 
 /*
- * 跳跃表
+ * 跳跃表(用于保存跳跃表节点的相关信息)
  */
 typedef struct zskiplist {
-	// 表头节点和表尾节点
+	// 表头节点和表尾节点(通过这两个指针，程序定位表头节点和表尾节点的复杂度为O(1)。)
     struct zskiplistNode *header, *tail;
-    // 表中节点的数量
+    // 记录表中节点的数量(跳跃表的长度，表头节点不计算在内。程序可以在O(1)复杂度内返回跳跃表的长度。)
     unsigned long length;
-    // 表中层数最大的节点的层数
+    // 表中层数最大的节点的层数(用于在O(1)复杂度内获取跳跃表中层高最大的那个节点的层数量，表头节点的层数不计算在内。)
     int level;
 } zskiplist;
 
@@ -1553,18 +1557,46 @@ typedef struct {
     int minex, maxex; /* are min or max exclusive? */
 } zlexrangespec;
 
+/*
+ * 作用：创建一个新的跳跃表
+ * 时间复杂度：O(1)
+ */
 zskiplist *zslCreate(void);
+/*
+ * 作用：释放给定跳跃表，以及表中包含的所有节点
+ * Time complexity: O(N)，N为跳跃表的长度
+ */
 void zslFree(zskiplist *zsl);
+/*
+ * 作用：将包含给定成员和分值的新节点添加到跳跃表中
+ * Time complexity: O(logN)，最坏O(N)，N为跳跃表长度
+ */
 zskiplistNode *zslInsert(zskiplist *zsl, double score, robj *obj);
 unsigned char *zzlInsert(unsigned char *zl, robj *ele, double score);
+/*
+ * 作用：删除跳跃表中包含给定成员和分值的节点
+ * Time complexity: 平均O(logN)，最坏O(N)，N为跳跃表长度
+ */
 int zslDelete(zskiplist *zsl, double score, robj *obj);
+/*
+ * 作用：给定一个分值范围，返回跳跃表中第一个符合这个范围的节点
+ * Time complexity: 平均O(logN)，最坏O(N)，N为跳跃表长度
+ */
 zskiplistNode *zslFirstInRange(zskiplist *zsl, zrangespec *range);
+/*
+ * 作用：给定一个分值范围，返回跳跃表中最后一个符合这个范围的节点
+ * Time complexity: 平均O(logN)，最坏O(N)，N为跳跃表长度
+ */
 zskiplistNode *zslLastInRange(zskiplist *zsl, zrangespec *range);
 double zzlGetScore(unsigned char *sptr);
 void zzlNext(unsigned char *zl, unsigned char **eptr, unsigned char **sptr);
 void zzlPrev(unsigned char *zl, unsigned char **eptr, unsigned char **sptr);
 unsigned int zsetLength(robj *zobj);
 void zsetConvert(robj *zobj, int encoding);
+/*
+ * 作用：返回包含给定成员和分值的节点在跳跃表中的排位
+ * Time complexity: 平均O(logN)，最坏O(N)，N为跳跃表长度
+ */
 unsigned long zslGetRank(zskiplist *zsl, double score, robj *o);
 
 /* Core functions */
