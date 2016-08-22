@@ -182,24 +182,43 @@ typedef long long mstime_t; /* millisecond time type. */
 
 /* Object types */
 // 对象类型
+/*
+ * 字符串对象(编码：REDIS_ENCODING_INT；对象：使用整数值实现的字符串对象。编码：REDIS_ENCODING_EMBSTR；对象：使用embstr编码的简单动态字符串实现的字符串对象
+ * 。编码：REDIS_ENCODING_RAW；对象：使用简单动态字符串实现的字符串对象。)
+ */
 #define REDIS_STRING 0
+// 列表对象(编码：REDIS_ENCODING_ZIPLIST；对象：使用压缩列表实现的列表对象。编码：REDIS_ENCODING_LINKEDLIST；对象：使用双端链表实现的列表对象。)
 #define REDIS_LIST 1
+// 集合对象(编码：REDIS_ENCODING_INTSET；对象：使用整数集合实现的集合对象。编码：REDIS_ENCODING_HT；对象：使用字典实现的集合对象。)
 #define REDIS_SET 2
+/*
+ * 有序集合对象(编码：REDIS_ENCODING_ZIPLIST；对象：使用压缩列表实现的有序集合对象。编码：REDIS_ENCODING_SKIPLIST；对象：使用跳跃表和字典实现的有序集合对象
+ * 。)
+ */
 #define REDIS_ZSET 3
+// 哈希对象(编码：REDIS_ENCODING_ZIPLIST；对象：使用压缩列表实现的哈希对象。编码：REDIS_ENCODING_HT；对象：使用字典实现的哈希对象。)
 #define REDIS_HASH 4
 
 /* Objects encoding. Some kind of objects like Strings and Hashes can be
  * internally represented in multiple ways. The 'encoding' field of the object
  * is set to one of this fields for this object. */
 // 对象编码
+// 简单动态字符串(object encoding命令输出："raw")
 #define REDIS_ENCODING_RAW 0     /* Raw representation */
+// long类型的整数(object encoding命令输出："int")
 #define REDIS_ENCODING_INT 1     /* Encoded as integer */
+// 字典(object encoding命令输出："hashtable")
 #define REDIS_ENCODING_HT 2      /* Encoded as hash table */
 #define REDIS_ENCODING_ZIPMAP 3  /* Encoded as zipmap */
+// 双端链表(object encoding命令输出："linkedlist")
 #define REDIS_ENCODING_LINKEDLIST 4 /* Encoded as regular linked list */
+// 压缩列表(object encoding命令输出："ziplist")
 #define REDIS_ENCODING_ZIPLIST 5 /* Encoded as ziplist */
+// 整数集合(object encoding命令输出："intset")
 #define REDIS_ENCODING_INTSET 6  /* Encoded as intset */
+// 跳跃表和字典(object encoding命令输出："skiplist")
 #define REDIS_ENCODING_SKIPLIST 7  /* Encoded as skiplist */
+// embstr编码的简单动态字符串(object encoding命令输出："embstr")
 #define REDIS_ENCODING_EMBSTR 8  /* Embedded sds string encoding */
 
 /* Defines related to the dump file format. To store 32 bits lengths for short
@@ -442,7 +461,10 @@ typedef struct redisObject {
     unsigned lru:REDIS_LRU_BITS; /* lru time (relative to server.lruclock) */
     // 引用计数
     int refcount;
-    // 指向实际值的指针
+    /*
+     * 指向底层实现数据结构的指针(由对象的encoding属性决定，见REDIS_ENCODING_*)
+     * 指向实际值的指针
+     */
     void *ptr;
 } robj;
 
