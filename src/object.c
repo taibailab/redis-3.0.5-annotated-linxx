@@ -85,6 +85,7 @@ robj *createEmbeddedStringObject(char *ptr, size_t len) {
  * The current limit of 39 is chosen so that the biggest string object
  * we allocate as EMBSTR will still fit into the 64 byte arena of jemalloc. */
 #define REDIS_ENCODING_EMBSTR_SIZE_LIMIT 39
+// 创建一个字符串对象s，对象的引用计数为1
 robj *createStringObject(char *ptr, size_t len) {
     if (len <= REDIS_ENCODING_EMBSTR_SIZE_LIMIT)
         return createEmbeddedStringObject(ptr,len);
@@ -301,6 +302,8 @@ void incrRefCount(robj *o) {
     o->refcount++;
 }
 
+// 将对象s的引用计数减一，使得对象的引用计数变为0
+// 导致对象s被释放
 void decrRefCount(robj *o) {
     if (o->refcount <= 0) redisPanic("decrRefCount against refcount <= 0");
     if (o->refcount == 1) {

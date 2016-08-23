@@ -80,6 +80,10 @@ typedef long long mstime_t; /* millisecond time type. */
 #define REDIS_DBCRON_DBS_PER_CALL 16
 #define REDIS_MAX_WRITE_PER_EVENT (1024*64)
 #define REDIS_SHARED_SELECT_CMDS 10
+/*
+ * 创建共享字符串的数量(目前Redis会在初始化服务器时，创建一万个字符串对象，这些对象包含了从0到9999的所有整数值，当服务器需要用到值为0到9999的字符串对象时，服务
+ * 器就会使用这些共享对象，而不是新创建对象。)
+ */
 #define REDIS_SHARED_INTEGERS 10000
 #define REDIS_SHARED_BULKHDR_LEN 32
 #define REDIS_MAX_LOGMSG_LEN    1024 /* Default maximum length of syslog messages */
@@ -182,24 +186,43 @@ typedef long long mstime_t; /* millisecond time type. */
 
 /* Object types */
 // 对象类型
+/*
+ * 字符串对象(编码：REDIS_ENCODING_INT；对象：使用整数值实现的字符串对象。编码：REDIS_ENCODING_EMBSTR；对象：使用embstr编码的简单动态字符串实现的字符串对象
+ * 。编码：REDIS_ENCODING_RAW；对象：使用简单动态字符串实现的字符串对象。)
+ */
 #define REDIS_STRING 0
+// 列表对象(编码：REDIS_ENCODING_ZIPLIST；对象：使用压缩列表实现的列表对象。编码：REDIS_ENCODING_LINKEDLIST；对象：使用双端链表实现的列表对象。)
 #define REDIS_LIST 1
+// 集合对象(编码：REDIS_ENCODING_INTSET；对象：使用整数集合实现的集合对象。编码：REDIS_ENCODING_HT；对象：使用字典实现的集合对象。)
 #define REDIS_SET 2
+/*
+ * 有序集合对象(编码：REDIS_ENCODING_ZIPLIST；对象：使用压缩列表实现的有序集合对象。编码：REDIS_ENCODING_SKIPLIST；对象：使用跳跃表和字典实现的有序集合对象
+ * 。)
+ */
 #define REDIS_ZSET 3
+// 哈希对象(编码：REDIS_ENCODING_ZIPLIST；对象：使用压缩列表实现的哈希对象。编码：REDIS_ENCODING_HT；对象：使用字典实现的哈希对象。)
 #define REDIS_HASH 4
 
 /* Objects encoding. Some kind of objects like Strings and Hashes can be
  * internally represented in multiple ways. The 'encoding' field of the object
  * is set to one of this fields for this object. */
 // 对象编码
+// 简单动态字符串(object encoding命令输出："raw")
 #define REDIS_ENCODING_RAW 0     /* Raw representation */
+// long类型的整数(object encoding命令输出："int")
 #define REDIS_ENCODING_INT 1     /* Encoded as integer */
+// 字典(object encoding命令输出："hashtable")
 #define REDIS_ENCODING_HT 2      /* Encoded as hash table */
 #define REDIS_ENCODING_ZIPMAP 3  /* Encoded as zipmap */
+// 双端链表(object encoding命令输出："linkedlist")
 #define REDIS_ENCODING_LINKEDLIST 4 /* Encoded as regular linked list */
+// 压缩列表(object encoding命令输出："ziplist")
 #define REDIS_ENCODING_ZIPLIST 5 /* Encoded as ziplist */
+// 整数集合(object encoding命令输出："intset")
 #define REDIS_ENCODING_INTSET 6  /* Encoded as intset */
+// 跳跃表和字典(object encoding命令输出："skiplist")
 #define REDIS_ENCODING_SKIPLIST 7  /* Encoded as skiplist */
+// embstr编码的简单动态字符串(object encoding命令输出："embstr")
 #define REDIS_ENCODING_EMBSTR 8  /* Embedded sds string encoding */
 
 /* Defines related to the dump file format. To store 32 bits lengths for short
@@ -356,11 +379,18 @@ typedef long long mstime_t; /* millisecond time type. */
 #define REDIS_OP_INTER 2
 
 /* Redis maxmemory strategies */
+// Redis六种最大内存策略(默认不进行置换)
+// 只从设置失效(expire set)的key中选择最近最不经常使用的key进行删除，用以保存新数据
 #define REDIS_MAXMEMORY_VOLATILE_LRU 0
+// 只从设置失效(expire set)的key中，选出存活时间(TTL)最短的key进行删除，用以保存新数据
 #define REDIS_MAXMEMORY_VOLATILE_TTL 1
+// 随机从all-keys中选择一些key进行删除，用以保存新数据
 #define REDIS_MAXMEMORY_VOLATILE_RANDOM 2
+// 优先删除掉最近最不经常使用的key，用以保存新数据
 #define REDIS_MAXMEMORY_ALLKEYS_LRU 3
+// 只从设置失效(expire set)的key中，选择一些key进行删除，用以保存新数据
 #define REDIS_MAXMEMORY_ALLKEYS_RANDOM 4
+// 不进行置换，表示即使内存达到上限也不进行置换，所有能引起内存增加的命令都会返回error
 #define REDIS_MAXMEMORY_NO_EVICTION 5
 #define REDIS_DEFAULT_MAXMEMORY_POLICY REDIS_MAXMEMORY_NO_EVICTION
 
@@ -438,11 +468,26 @@ typedef struct redisObject {
     unsigned type:4;
     // 编码
     unsigned encoding:4;
-    // 对象最后一次被访问的时间
+    /*
+     * 对象最后一次被访问的时间(对象的空转时长)
+     * OBJECT IDLETIME key命令的实现是特殊的，这个命令在访问键的值对象时，不会修改值对象的lru属性。
+     * 如果服务器打开了maxmemory选项，并且服务器用于回收内存的算法为volatile-lru或者allkeys-lru，那么当服务器占用的内存数超过了maxmemory选项所设置的上限值时
+     * ，空转时长较高的那部分键会优先被服务器释放，从而回收内存。
+     */
     unsigned lru:REDIS_LRU_BITS; /* lru time (relative to server.lruclock) */
-    // 引用计数
+    /*
+     * 引用计数(内存回收和对象共享)
+     * 1.通过引用计数技术实现内存回收机制，程序通过跟踪每个对象的引用计数信息，在适当的时候自动释放对象并进行内存回收。对象的引用计数信息会随着对象的使用状态
+     * 而不断变化：(1).在创建一个新对象时，引用计数的值会被初始化为1；(2).当对象被一个新程序使用时，它的引用计数值会被增一；(3)当对象不再被一个程序使用时，它
+     * 的引用计数值会被减一；(4).当对象的引用计数值变为0时，对象所占用的内存会被释放。
+     * 2.通过引用计数计数实现对象共享作用。在Redis中，让多个键共享同一个值对象需要执行以下两个步骤：1).将数据库键的值指针指向一个现有的值对象；2).将被共享的值
+     * 对象的引用计数增一。
+     */
     int refcount;
-    // 指向实际值的指针
+    /*
+     * 指向底层实现数据结构的指针(由对象的encoding属性决定，见REDIS_ENCODING_*)
+     * 指向实际值的指针
+     */
     void *ptr;
 } robj;
 
@@ -1449,9 +1494,18 @@ void discardTransaction(redisClient *c);
 void flagTransaction(redisClient *c);
 
 /* Redis object implementation */
+/*
+ * 作用：将对象的引用计数值减一，将对象的引用计数值等于0时，释放对象
+ */
 void decrRefCount(robj *o);
 void decrRefCountVoid(void *o);
+/*
+ * 作用：将对象的引用计数值增一
+ */
 void incrRefCount(robj *o);
+/*
+ * 将对象的引用计数值设置为0，但并不释放对象，这个函数通常在需要重新设置对象的引用计数器时使用
+ */
 robj *resetRefCount(robj *obj);
 void freeStringObject(robj *o);
 void freeListObject(robj *o);
