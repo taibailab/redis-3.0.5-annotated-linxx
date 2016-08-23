@@ -41,45 +41,92 @@ void slotToKeyFlush(void);
  * C-level DB API
  *----------------------------------------------------------------------------*/
 
+/*
+ * 从数据库db中取出键key的值(对象)
+ *
+ * 如果key的值存在，那么返回该值；否则，返回NULL。
+ */
 robj *lookupKey(redisDb *db, robj *key) {
+	// 查找键空间
     dictEntry *de = dictFind(db->dict,key->ptr);
+    // 节点存在
     if (de) {
+    	// 取出值
         robj *val = dictGetVal(de);
 
         /* Update the access time for the ageing algorithm.
          * Don't do it if we have a saving child, as this will trigger
          * a copy on write madness. */
+        // 更新时间信息(只在不存在子进程时进行，防止破坏copy-on-write机制)
         if (server.rdb_child_pid == -1 && server.aof_child_pid == -1)
             val->lru = LRU_CLOCK();
+        // 返回值
         return val;
     } else {
+    	// 节点不存在
         return NULL;
     }
 }
 
+/*
+ * 为执行读取操作而取出键key在数据库db中的值。
+ *
+ * 并根据是否成功找到值，更新服务器的命中/不命中信息。
+ *
+ * 找到时返回值对象，没找到返回NULL。
+ */
 robj *lookupKeyRead(redisDb *db, robj *key) {
     robj *val;
 
+    // 检查key释放已经过期
     expireIfNeeded(db,key);
+    // 从数据库中取出键的值
     val = lookupKey(db,key);
+    // 更新命中/不命中信息
     if (val == NULL)
         server.stat_keyspace_misses++;
     else
         server.stat_keyspace_hits++;
+    // 返回值
     return val;
 }
 
+/*
+ * 为执行写入操作而取出键key在数据库db中的值。
+ *
+ * 和lookupKeyRead不同，这个函数不会更新服务器的命中/不命中信息。
+ *
+ * 找到时返回值对象，没找到返回NULL。
+ */
 robj *lookupKeyWrite(redisDb *db, robj *key) {
+	// 删除过期键
     expireIfNeeded(db,key);
+    // 查找并返回key的值对象
     return lookupKey(db,key);
 }
 
+/*
+ * 为执行读取操作而从数据库中查找返回key的值。
+ *
+ * 如果key存在，那么返回key的值对象。
+ *
+ * 如果key不存在，那么向客户端发送reply参数中的信息，并返回NULL。
+ */
 robj *lookupKeyReadOrReply(redisClient *c, robj *key, robj *reply) {
+	// 查找
     robj *o = lookupKeyRead(c->db, key);
+    // 决定是否发送信息
     if (!o) addReply(c,reply);
     return o;
 }
 
+/*
+ * 为执行写入操作而从数据库中查找返回key的值。
+ *
+ * 如果key存在，那么返回key的值对象。
+ *
+ * 如果key不存在，那么向客户端发送reply参数中的信息，并返回NULL。
+ */
 robj *lookupKeyWriteOrReply(redisClient *c, robj *key, robj *reply) {
     robj *o = lookupKeyWrite(c->db, key);
     if (!o) addReply(c,reply);
@@ -89,45 +136,76 @@ robj *lookupKeyWriteOrReply(redisClient *c, robj *key, robj *reply) {
 /* Add the key to the DB. It's up to the caller to increment the reference
  * counter of the value if needed.
  *
- * The program is aborted if the key already exists. */
+ * 尝试将键值对key和val添加到数据库中。调用者负责对key和val的引用计数进行增加。
+ *
+ * The program is aborted if the key already exists.
+ *
+ * 程序在键已经存在时会停止。
+ */
 void dbAdd(redisDb *db, robj *key, robj *val) {
+	// 复制键名
     sds copy = sdsdup(key->ptr);
+    // 尝试添加键值对
     int retval = dictAdd(db->dict, copy, val);
 
+    // 如果键已经存在，那么停止
     redisAssertWithInfo(NULL,key,retval == REDIS_OK);
     if (val->type == REDIS_LIST) signalListAsReady(db, key);
+    // 如果开启了集群模式，那么将键保存到槽里面
     if (server.cluster_enabled) slotToKeyAdd(key);
  }
 
 /* Overwrite an existing key with a new value. Incrementing the reference
  * count of the new value is up to the caller.
+ *
+ * 为已存在的键关联一个新值。调用者负责对新值val的引用计数进行增加。
+ *
  * This function does not modify the expire time of the existing key.
  *
- * The program is aborted if the key was not already present. */
+ * 这个函数不会修改键的过期时间。
+ *
+ * The program is aborted if the key was not already present.
+ *
+ * 如果键不存在，那么函数停止。
+ */
 void dbOverwrite(redisDb *db, robj *key, robj *val) {
     dictEntry *de = dictFind(db->dict,key->ptr);
 
+    // 如果键不存在，否则终止
     redisAssertWithInfo(NULL,key,de != NULL);
+    // 覆写旧值
     dictReplace(db->dict, key->ptr, val);
 }
 
 /* High level Set operation. This function can be used in order to set
  * a key, whatever it was existing or not, to a new object.
  *
+ * 高层次的SET操作函数。这个函数可以在不管键key是否存在的情况下，将它和val关联起来。
+ *
  * 1) The ref count of the value object is incremented.
+ * 	     值对象的引用计数会被增加
  * 2) clients WATCHing for the destination key notified.
- * 3) The expire time of the key is reset (the key is made persistent). */
+ * 	     监视键key的客户端会收到键已经被修改的通知
+ * 3) The expire time of the key is reset (the key is made persistent).
+ * 	     键的过期时间会被移除(键变为持久的)
+ */
 void setKey(redisDb *db, robj *key, robj *val) {
+	// 添加或覆写数据库中的键值对
     if (lookupKeyWrite(db,key) == NULL) {
         dbAdd(db,key,val);
     } else {
         dbOverwrite(db,key,val);
     }
     incrRefCount(val);
+    // 移除键的过期时间
     removeExpire(db,key);
+    // 发送键修改通知
     signalModifiedKey(db,key);
 }
 
+/*
+ * 检查键key是否存在于数据库中，存在返回1，不存在返回0。
+ */
 int dbExists(redisDb *db, robj *key) {
     return dictFind(db->dict,key->ptr) != NULL;
 }
@@ -135,7 +213,13 @@ int dbExists(redisDb *db, robj *key) {
 /* Return a random key, in form of a Redis object.
  * If there are no keys, NULL is returned.
  *
- * The function makes sure to return keys not already expired. */
+ * 随机从数据库中取出一个键，并以字符串对象的方式返回整个键。
+ * 如果数据库为空，那么返回NULL。
+ *
+ * The function makes sure to return keys not already expired.
+ *
+ * 这个函数保证被返回的键都是未过期的。
+ */
 robj *dbRandomKey(redisDb *db) {
     dictEntry *de;
 
@@ -143,30 +227,46 @@ robj *dbRandomKey(redisDb *db) {
         sds key;
         robj *keyobj;
 
+        // 从键空间中随机取出一个键节点
         de = dictGetRandomKey(db->dict);
+        // 数据库为空
         if (de == NULL) return NULL;
 
+        // 取出键
         key = dictGetKey(de);
+        // 为键创建一个字符串对象，对象的值为键的名字
         keyobj = createStringObject(key,sdslen(key));
+        // 检查键是否带有过期时间
         if (dictFind(db->expires,key)) {
+        	// 如果键已经过期，那么将它删除，并继续随机下个键
             if (expireIfNeeded(db,keyobj)) {
                 decrRefCount(keyobj);
                 continue; /* search for another key. This expired. */
             }
         }
+        // 返回被随机到的键(的名字)
         return keyobj;
     }
 }
 
-/* Delete a key, value, and associated expiration entry if any, from the DB */
+/* Delete a key, value, and associated expiration entry if any, from the DB
+ *
+ * 从数据库中删除给定的键，键的值，以及键的过期时间。
+ *
+ * 删除成功返回1，因为键不存在而导致删除失败时，返回0。
+ */
 int dbDelete(redisDb *db, robj *key) {
     /* Deleting an entry from the expires dict will not free the sds of
      * the key, because it is shared with the main dictionary. */
+	// 删除键的过期时间
     if (dictSize(db->expires) > 0) dictDelete(db->expires,key->ptr);
+    // 删除键值对
     if (dictDelete(db->dict,key->ptr) == DICT_OK) {
+    	// 如果开启了集群模式，那么从槽中删除给定的键
         if (server.cluster_enabled) slotToKeyDel(key);
         return 1;
     } else {
+    	// 键不存在
         return 0;
     }
 }
@@ -209,6 +309,9 @@ robj *dbUnshareStringValue(redisDb *db, robj *key, robj *o) {
     return o;
 }
 
+/*
+ * 清空服务器的所有数据。
+ */
 long long emptyDb(void(callback)(void*)) {
     int j;
     long long removed = 0;
