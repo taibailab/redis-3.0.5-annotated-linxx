@@ -1828,6 +1828,7 @@ int rewriteConfig(char *path) {
     rewriteConfigStringOption(state,"requirepass",server.requirepass,NULL);
     rewriteConfigNumericalOption(state,"maxclients",server.maxclients,REDIS_MAX_CLIENTS);
     rewriteConfigBytesOption(state,"maxmemory",server.maxmemory,REDIS_DEFAULT_MAXMEMORY);
+    // Redis的六种策略
     rewriteConfigEnumOption(state,"maxmemory-policy",server.maxmemory_policy,
         "volatile-lru", REDIS_MAXMEMORY_VOLATILE_LRU,
         "allkeys-lru", REDIS_MAXMEMORY_ALLKEYS_LRU,
