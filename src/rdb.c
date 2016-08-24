@@ -40,36 +40,59 @@
 #include <arpa/inet.h>
 #include <sys/stat.h>
 
+/*
+ * 将长度为len的字符数组p写入到rdb中。
+ *
+ * 写入成功返回len，失败返回-1。
+ */
 static int rdbWriteRaw(rio *rdb, void *p, size_t len) {
     if (rdb && rioWrite(rdb,p,len) == 0)
         return -1;
     return len;
 }
 
+/*
+ * 将长度为1字节的字符type写入到rdb文件中。
+ */
 int rdbSaveType(rio *rdb, unsigned char type) {
     return rdbWriteRaw(rdb,&type,1);
 }
 
 /* Load a "type" in RDB format, that is a one byte unsigned integer.
+ *
+ * 从rdb中载入1字节长的type数据。
+ *
  * This function is not only used to load object types, but also special
- * "types" like the end-of-file type, the EXPIRE type, and so forth. */
+ * "types" like the end-of-file type, the EXPIRE type, and so forth.
+ *
+ * 函数既可以用于载入键的类型(rdb.h/REDIS_RDB_TYPE_*)，也可以用于载入特殊标识号(rdb.h/REDIS_RDB_OPCODE_*)
+ */
 int rdbLoadType(rio *rdb) {
     unsigned char type;
     if (rioRead(rdb,&type,1) == 0) return -1;
     return type;
 }
 
+/*
+ * 载入以秒为单位的过期时间，长度为4字节
+ */
 time_t rdbLoadTime(rio *rdb) {
     int32_t t32;
     if (rioRead(rdb,&t32,4) == 0) return -1;
     return (time_t)t32;
 }
 
+/*
+ * 将长度为8字节的毫秒过期时间写入到rdb中。
+ */
 int rdbSaveMillisecondTime(rio *rdb, long long t) {
     int64_t t64 = (int64_t) t;
     return rdbWriteRaw(rdb,&t64,8);
 }
 
+/*
+ * 从rdb中载入8字节长的毫秒过期时间。
+ */
 long long rdbLoadMillisecondTime(rio *rdb) {
     int64_t t64;
     if (rioRead(rdb,&t64,8) == 0) return -1;
@@ -78,7 +101,12 @@ long long rdbLoadMillisecondTime(rio *rdb) {
 
 /* Saves an encoded length. The first two bits in the first byte are used to
  * hold the encoding type. See the REDIS_RDB_* definitions for more information
- * on the types of encoding. */
+ * on the types of encoding.
+ *
+ * 对len进行特殊编码之后写入到rdb。
+ *
+ * 写入成功返回保存编码后的len所需的字节数。
+ */
 int rdbSaveLen(rio *rdb, uint32_t len) {
     unsigned char buf[2];
     size_t nwritten;
@@ -107,26 +135,34 @@ int rdbSaveLen(rio *rdb, uint32_t len) {
 
 /* Load an encoded length. The "isencoded" argument is set to 1 if the length
  * is not actually a length but an "encoding type". See the REDIS_RDB_ENC_*
- * definitions in rdb.h for more information. */
+ * definitions in rdb.h for more information.
+ *
+ * 读入一个被编码的长度值。如果length值不是整数，而是一个被编码后值，那么isencoded将被设为1。查看rdb./hREDIS_RDB_ENC_*定义以获得更多信息。
+ */
 uint32_t rdbLoadLen(rio *rdb, int *isencoded) {
     unsigned char buf[2];
     uint32_t len;
     int type;
 
     if (isencoded) *isencoded = 0;
+    // 读入length，这个值可能已经被编码，也可能没有
     if (rioRead(rdb,buf,1) == 0) return REDIS_RDB_LENERR;
     type = (buf[0]&0xC0)>>6;
+    // 编码值，进行解码
     if (type == REDIS_RDB_ENCVAL) {
         /* Read a 6 bit encoding type. */
         if (isencoded) *isencoded = 1;
         return buf[0]&0x3F;
+    // 6位整数
     } else if (type == REDIS_RDB_6BITLEN) {
         /* Read a 6 bit len. */
         return buf[0]&0x3F;
+    // 14位整数
     } else if (type == REDIS_RDB_14BITLEN) {
         /* Read a 14 bit len. */
         if (rioRead(rdb,buf+1,1) == 0) return REDIS_RDB_LENERR;
         return ((buf[0]&0x3F)<<8)|buf[1];
+    // 32位整数
     } else {
         /* Read a 32 bit len. */
         if (rioRead(rdb,&len,4) == 0) return REDIS_RDB_LENERR;
@@ -137,7 +173,11 @@ uint32_t rdbLoadLen(rio *rdb, int *isencoded) {
 /* Encodes the "value" argument as integer when it fits in the supported ranges
  * for encoded types. If the function successfully encodes the integer, the
  * representation is stored in the buffer pointer to by "enc" and the string
- * length is returned. Otherwise 0 is returned. */
+ * length is returned. Otherwise 0 is returned.
+ *
+ * 尝试使用特殊的整数编码来保存value，这要求它的值必须在给定范围之内。如果可以编码的话，将编码后的值保存在enc指针中，并返回值在编码后所需的长度。如果不能编码
+ * 的话，返回0。
+ /
 int rdbEncodeInteger(long long value, unsigned char *enc) {
     if (value >= -(1<<7) && value <= (1<<7)-1) {
         enc[0] = (REDIS_RDB_ENCVAL<<6)|REDIS_RDB_ENC_INT8;
