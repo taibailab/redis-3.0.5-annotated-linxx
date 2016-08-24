@@ -525,9 +525,19 @@ struct evictionPoolEntry {
  * by integers from 0 (the default database) up to the max configured
  * database. The database number is the 'id' field in the structure. */
 typedef struct redisDb {
-	// 数据库键空间，保存着数据库中的所有键值对
+	/*
+	 * 数据库键空间(key space)，保存着数据库中的所有键值对
+	 * 键空间和用户所见的数据库是直接对应的：(1).键空间的键也就是数据库的键，每个键都是一个字符串对象。(2).键空间的值也就是数据库的值，每个值可以是字符串对象
+	 * 、列表对象、哈希表对象、集合对象和有序集合对象中的任意一种Redis对象。
+	 * 所有针对数据库的操作，实际上都是通过对键空间字典进行操作来实现的。
+	 */
     dict *dict;                 /* The keyspace for this DB */
-    // 键的过期时间，字典的键为键，字典的值为过期时间UNIX时间戳
+    /*
+     * 过期字典，expires字典保存了数据库中所有键的过期时间
+     * (1).过期字典的键是一个指针，这个指针指向键空间中的某个键对象(也即是某个数据库键)。
+     * (2).过期字典的值是一个long long类型的整数，这个整数保存了键所指向的数据库键的过期时间-一个毫秒精度的UNIX时间戳。
+     * 键的过期时间，字典的键为键，字典的值为过期时间UNIX时间戳
+     */
     dict *expires;              /* Timeout of keys with a timeout set */
     // 正处于阻塞状态的键
     dict *blocking_keys;        /* Keys with clients waiting for data (BLPOP) */
@@ -619,7 +629,10 @@ typedef struct redisClient {
     uint64_t id;            /* Client incremental unique ID. */
 	// 套接字描述符
     int fd;
-    // 当前正在使用的数据库
+    /*
+     * 记录客户端当前正在使用的数据库(记录了客户端当前的目标数据库，这个属性是指向redisDb结构的指针。)
+     * [SELECT命令实现原理]通过修改redisClient.db指针，让它指向服务器中的不同数据库，从而实现切换目标数据库的功能。
+     */
     redisDb *db;
     // 当前正在使用的数据库的id(号码)
     int dictid;
@@ -849,7 +862,7 @@ struct redisServer {
     char *configfile;           /* Absolute config file path, or NULL */
     // serverCron()每秒调用的次数
     int hz;                     /* serverCron() calls frequency in hertz */
-    // 数据库
+    // 数据库(一个数组，保存着服务器中的所有数据库。该数组中的每个都是redis.h/redisDb结构，每个redisDb结构代表一个数据库。)
     redisDb *db;
     // 命令表(收到rename配置选项的作用)
     dict *commands;             /* Command table */
@@ -934,9 +947,9 @@ struct redisServer {
     long long stat_expiredkeys;     /* Number of expired keys */
     // 因为回收内存而被释放的过期键的数量
     long long stat_evictedkeys;     /* Number of evicted keys (maxmemory) */
-    // 成功查找键的次数
+    // 成功查找键的次数(hits命中次数)
     long long stat_keyspace_hits;   /* Number of successful lookups of keys */
-    // 查找键失败的次数
+    // 查找键失败的次数(miss不命中次数)
     long long stat_keyspace_misses; /* Number of failed lookups of keys */
     // 已使用内存峰值
     size_t stat_peak_memory;        /* Max used memory record */
@@ -984,6 +997,10 @@ struct redisServer {
     int tcpkeepalive;               /* Set SO_KEEPALIVE if non-zero. */
     int active_expire_enabled;      /* Can be disabled for testing purposes. */
     size_t client_max_querybuf_len; /* Limit for client query buffer length */
+    /*
+     * 服务器的数据库数量(在初始化服务器时，程序会根据服务器状态的dbnum属性来决定应该创建多少个数据库。该属性的值由服务器的database选项决定，默认情况下，该选
+     * 项的值为16，所以Redis服务器默认会出创建16个数据库。)
+     */
     int dbnum;                      /* Total number of configured DBs */
     int daemonize;                  /* True if running as a daemon */
     // 客户端输出缓冲区大小限制

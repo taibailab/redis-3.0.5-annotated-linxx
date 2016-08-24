@@ -851,7 +851,16 @@ int activeExpireCycleTryExpire(redisDb *db, dictEntry *de, long long now) {
  * 如果循环的类型为ACTIVE_EXPIRE_CYCLE_SLOW，那么函数会以“正常过期”模式执行，函数的执行时限为REDIS_HS常量的一个百分比，这个百分比由
  * REDIS_EXPIRELOOKUPS_TIME_PERC定义。
  */
-
+/*
+ * Redis过期键的定期删除策略
+ * 每当Redis的服务器周期性操作redis.c/serverCron函数执行时，activeExpireCycle函数就会被调用，它在规定的时间内，分多次遍历服务器中的各个数据库，从数据库的
+ * expires字典中随机检查一部分键的过期时间，并删除其中的过期键。
+ * activeExpireCycle()函数的工作模式：
+ * (1).函数每次运行时，都从一定数量的数据库中取出一定数量的随机键进行检查，并删除其中的过期键。
+ * (2).全局变量current_db会记录当前activeExpireCycle()函数检查的进度，并在下一次activeExpireCycle()函数调用时，接着上一次的进度进行处理。比如说，如果当前
+ * activeExpireCycle()函数在遍历10号数据库时返回了，那么下次activeExpireCycle()函数执行时，将从11号数据库开始查找并删除过期键。
+ * (3).随着activeExpireCycle()函数的不断执行，服务器中的所有数据库都会被检查一遍，这时函数将current_db变量重置为0，然后再次开始新一轮的检查工作。
+ */
 void activeExpireCycle(int type) {
     /* This function has some global state in order to continue the work
      * incrementally across calls. */
