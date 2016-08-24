@@ -533,7 +533,9 @@ typedef struct redisDb {
 	 */
     dict *dict;                 /* The keyspace for this DB */
     /*
-     * 过期字典，保存着键的过期时间
+     * 过期字典，expires字典保存了数据库中所有键的过期时间
+     * (1).过期字典的键是一个指针，这个指针指向键空间中的某个键对象(也即是某个数据库键)。
+     * (2).过期字典的值是一个long long类型的整数，这个整数保存了键所指向的数据库键的过期时间-一个毫秒精度的UNIX时间戳。
      * 键的过期时间，字典的键为键，字典的值为过期时间UNIX时间戳
      */
     dict *expires;              /* Timeout of keys with a timeout set */
