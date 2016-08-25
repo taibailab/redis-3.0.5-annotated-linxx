@@ -5,19 +5,31 @@
  * Redis cluster data structures, defines, exported API.
  *----------------------------------------------------------------------------*/
 
+// 槽数量
 #define REDIS_CLUSTER_SLOTS 16384
+// 集群在线
 #define REDIS_CLUSTER_OK 0          /* Everything looks ok */
+// 集群下线
 #define REDIS_CLUSTER_FAIL 1        /* The cluster can't work */
+// 节点名字的长度
 #define REDIS_CLUSTER_NAMELEN 40    /* sha1 hex length */
+// 集群的实际端口号 = 用户指定的端口号 + REDIS_CLUSTER_PORT_INCR
 #define REDIS_CLUSTER_PORT_INCR 10000 /* Cluster port = baseport + PORT_INCR */
 
 /* The following defines are amount of time, sometimes expressed as
- * multiplicators of the node timeout value (when ending with MULT). */
+ * multiplicators of the node timeout value (when ending with MULT).
+ *
+ * 以下是和时间有关的一些常量，以_MULTI结尾的常量会作为时间值的乘法因子来使用。
+ */
+// 默认节点超时时限
 #define REDIS_CLUSTER_DEFAULT_NODE_TIMEOUT 15000
 #define REDIS_CLUSTER_DEFAULT_SLAVE_VALIDITY 10 /* Slave max data age factor. */
 #define REDIS_CLUSTER_DEFAULT_REQUIRE_FULL_COVERAGE 1
+// 检验下线报告的乘法因子
 #define REDIS_CLUSTER_FAIL_REPORT_VALIDITY_MULT 2 /* Fail report validity. */
+// 撤销主节点FAIL状态的乘法因子
 #define REDIS_CLUSTER_FAIL_UNDO_TIME_MULT 2 /* Undo fail if master is back. */
+// 撤销主节点FAIL状态的加法因子
 #define REDIS_CLUSTER_FAIL_UNDO_TIME_ADD 10 /* Some additional time. */
 #define REDIS_CLUSTER_FAILOVER_DELAY 5 /* Seconds */
 #define REDIS_CLUSTER_DEFAULT_MIGRATION_BARRIER 1

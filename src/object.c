@@ -36,6 +36,9 @@
 #define strtold(a,b) ((long double)strtod((a),(b)))
 #endif
 
+/*
+ * 创建一个robj新对象
+ */
 robj *createObject(int type, void *ptr) {
     robj *o = zmalloc(sizeof(*o));
     o->type = type;
@@ -50,6 +53,7 @@ robj *createObject(int type, void *ptr) {
 
 /* Create a string object with encoding REDIS_ENCODING_RAW, that is a plain
  * string object where o->ptr points to a proper sds string. */
+// 创建一个REDIS_ENCODING_RAW编码的字符对象，对象的指针指向一个sds结构
 robj *createRawStringObject(char *ptr, size_t len) {
     return createObject(REDIS_STRING,sdsnewlen(ptr,len));
 }
@@ -57,6 +61,7 @@ robj *createRawStringObject(char *ptr, size_t len) {
 /* Create a string object with encoding REDIS_ENCODING_EMBSTR, that is
  * an object where the sds string is actually an unmodifiable string
  * allocated in the same chunk as the object itself. */
+// 创建一个REDIS_ENCODING_EMBSTR编码的字符串对象，这个字符串对象中的sds会和字符串对象的redisObject结构一起分配，因此这个字符也是不可修改的
 robj *createEmbeddedStringObject(char *ptr, size_t len) {
     robj *o = zmalloc(sizeof(robj)+sizeof(struct sdshdr)+len+1);
     struct sdshdr *sh = (void*)(o+1);
@@ -93,16 +98,25 @@ robj *createStringObject(char *ptr, size_t len) {
         return createRawStringObject(ptr,len);
 }
 
+/*
+ * 根据传入的整数值，创建一个字符串对象
+ *
+ * 这个字符串的对象保存的可以是INT编码的long值，也可以是RAW编码的、被转换成字符串的long long值。
+ */
 robj *createStringObjectFromLongLong(long long value) {
     robj *o;
+    // value的大小符合REDIS共享整数的范围，那么返回一个共享对象
     if (value >= 0 && value < REDIS_SHARED_INTEGERS) {
         incrRefCount(shared.integers[value]);
         o = shared.integers[value];
+    // 不符合共享范围，创建一个新的整数对象
     } else {
+    	// 值可以用long类型保存，创建一个REDIS_ENCODING_INT编码的字符串对象
         if (value >= LONG_MIN && value <= LONG_MAX) {
             o = createObject(REDIS_STRING, NULL);
             o->encoding = REDIS_ENCODING_INT;
             o->ptr = (void*)((long)value);
+        // 值不能用long类型保存的(long long类型)，将值转换为字符串，并创建一个REDIS_ENCODING_RAW的字符串对象来保存值
         } else {
             o = createObject(REDIS_STRING,sdsfromlonglong(value));
         }
@@ -116,6 +130,11 @@ robj *createStringObjectFromLongLong(long long value) {
  * and the output of snprintf() is not modified.
  *
  * The 'humanfriendly' option is used for INCRBYFLOAT and HINCRBYFLOAT. */
+/*
+ * 根据传入的long double值，为它创建一个字符串对象
+ *
+ * 对象将long double转换为字符串来保存
+ */
 robj *createStringObjectFromLongDouble(long double value, int humanfriendly) {
     char buf[256];
     int len;
@@ -136,30 +155,41 @@ robj *createStringObjectFromLongDouble(long double value, int humanfriendly) {
          * way that is "non surprising" for the user (that is, most small
          * decimal numbers will be represented in a way that when converted
          * back into a string are exactly the same as what the user typed.) */
+    	// 使用17位小数精度，这种精度可以在大部分机器上被rounding而不变
         len = snprintf(buf,sizeof(buf),"%.17Lf", value);
         /* Now remove trailing zeroes after the '.' */
+        // 移除尾部的0。比如3.1400000将变成3.14，而3.00000将变成3
         if (strchr(buf,'.') != NULL) {
             char *p = buf+len-1;
             while(*p == '0') {
                 p--;
                 len--;
             }
+            // 如果不需要小数点，那么移除它
             if (*p == '.') len--;
         }
     } else {
         len = snprintf(buf,sizeof(buf),"%.17Lg", value);
     }
+    // 创建对象
     return createStringObject(buf,len);
 }
 
 /* Duplicate a string object, with the guarantee that the returned object
  * has the same encoding as the original one.
  *
+ * 复制一个字符串对象，复制出的对象和输入对象拥有相同编码。
+ *
  * This function also guarantees that duplicating a small integere object
  * (or a string object that contains a representation of a small integer)
  * will always result in a fresh object that is unshared (refcount == 1).
  *
- * The resulting object always has refcount set to 1. */
+ * 另外，这个函数在复制一个包含整数值的字符串对象时，总是产生一个非共享的对象。
+ *
+ * The resulting object always has refcount set to 1.
+ *
+ * 输出对象的refcount总为1。
+ */
 robj *dupStringObject(robj *o) {
     robj *d;
 
@@ -181,6 +211,9 @@ robj *dupStringObject(robj *o) {
     }
 }
 
+/*
+ * 创建一个LINKEDLIST编码的列表对象
+ */
 robj *createListObject(void) {
     list *l = listCreate();
     robj *o = createObject(REDIS_LIST,l);
@@ -189,6 +222,9 @@ robj *createListObject(void) {
     return o;
 }
 
+/*
+ * 创建一个ZIPLIST编码的列表对象
+ */
 robj *createZiplistObject(void) {
     unsigned char *zl = ziplistNew();
     robj *o = createObject(REDIS_LIST,zl);
@@ -196,6 +232,9 @@ robj *createZiplistObject(void) {
     return o;
 }
 
+/*
+ * 创建一个SET编码的集合对象
+ */
 robj *createSetObject(void) {
     dict *d = dictCreate(&setDictType,NULL);
     robj *o = createObject(REDIS_SET,d);
@@ -203,6 +242,9 @@ robj *createSetObject(void) {
     return o;
 }
 
+/*
+ * 创建一个INTSET编码的集合对象
+ */
 robj *createIntsetObject(void) {
     intset *is = intsetNew();
     robj *o = createObject(REDIS_SET,is);
@@ -210,6 +252,9 @@ robj *createIntsetObject(void) {
     return o;
 }
 
+/*
+ * 创建一个ZIPLIST编码的哈希对象
+ */
 robj *createHashObject(void) {
     unsigned char *zl = ziplistNew();
     robj *o = createObject(REDIS_HASH, zl);
@@ -217,6 +262,9 @@ robj *createHashObject(void) {
     return o;
 }
 
+/*
+ * 创建一个SKIPLIST编码的有序集合
+ */
 robj *createZsetObject(void) {
     zset *zs = zmalloc(sizeof(*zs));
     robj *o;
@@ -228,6 +276,9 @@ robj *createZsetObject(void) {
     return o;
 }
 
+/*
+ * 创建一个ZIPLIST编码的有序集合
+ */
 robj *createZsetZiplistObject(void) {
     unsigned char *zl = ziplistNew();
     robj *o = createObject(REDIS_ZSET,zl);
@@ -235,12 +286,18 @@ robj *createZsetZiplistObject(void) {
     return o;
 }
 
+/*
+ * 释放字符串对象
+ */
 void freeStringObject(robj *o) {
     if (o->encoding == REDIS_ENCODING_RAW) {
         sdsfree(o->ptr);
     }
 }
 
+/*
+ * 释放列表对象
+ */
 void freeListObject(robj *o) {
     switch (o->encoding) {
     case REDIS_ENCODING_LINKEDLIST:
@@ -254,6 +311,9 @@ void freeListObject(robj *o) {
     }
 }
 
+/*
+ * 释放集合对象
+ */
 void freeSetObject(robj *o) {
     switch (o->encoding) {
     case REDIS_ENCODING_HT:
@@ -267,6 +327,9 @@ void freeSetObject(robj *o) {
     }
 }
 
+/*
+ * 释放有序集合对象
+ */
 void freeZsetObject(robj *o) {
     zset *zs;
     switch (o->encoding) {
@@ -284,6 +347,9 @@ void freeZsetObject(robj *o) {
     }
 }
 
+/*
+ * 释放哈希对象
+ */
 void freeHashObject(robj *o) {
     switch (o->encoding) {
     case REDIS_ENCODING_HT:
@@ -298,14 +364,23 @@ void freeHashObject(robj *o) {
     }
 }
 
+/*
+ * 为对象的引用计数增一
+ */
 void incrRefCount(robj *o) {
     o->refcount++;
 }
 
-// 将对象s的引用计数减一，使得对象的引用计数变为0
-// 导致对象s被释放
+/*
+ * 将对象s的引用计数减一，使得对象的引用计数变为0
+ * 导致对象s被释放
+ *
+ * 为对象的引用计数减一
+ * 当对象的引用计数降为0时，释放对象
+ */
 void decrRefCount(robj *o) {
     if (o->refcount <= 0) redisPanic("decrRefCount against refcount <= 0");
+    // 释放对象
     if (o->refcount == 1) {
         switch(o->type) {
         case REDIS_STRING: freeStringObject(o); break;
@@ -316,6 +391,7 @@ void decrRefCount(robj *o) {
         default: redisPanic("Unknown object type"); break;
         }
         zfree(o);
+    // 减少计数
     } else {
         o->refcount--;
     }
@@ -323,18 +399,28 @@ void decrRefCount(robj *o) {
 
 /* This variant of decrRefCount() gets its argument as void, and is useful
  * as free method in data structures that expect a 'void free_object(void*)'
- * prototype for the free method. */
+ * prototype for the free method.
+ *
+ * 作用于特定数据结构的释放函数包装
+ */
 void decrRefCountVoid(void *o) {
     decrRefCount(o);
 }
 
 /* This function set the ref count to zero without freeing the object.
+ *
+ * 这个函数将对象的引用计数设为0，但并不释放对象。
+ *
  * It is useful in order to pass a new object to functions incrementing
  * the ref count of the received object. Example:
+ *
+ * 这个函数在将一个对象传入一个会增加引用计数的函数中时，非常有用。就像这样：
  *
  *    functionThatWillIncrementRefCount(resetRefCount(CreateObject(...)));
  *
  * Otherwise you need to resort to the less elegant pattern:
+ *
+ * 没有这个函数的话，事情就会比较麻烦了：
  *
  *    *obj = createObject(...);
  *    functionThatWillIncrementRefCount(obj);
@@ -345,6 +431,11 @@ robj *resetRefCount(robj *obj) {
     return obj;
 }
 
+/*
+ * 检查对象o的类型是否和type相同：
+ * -相同返回0
+ * -不相同返回1，并向客户端回复一个错误
+ */
 int checkType(redisClient *c, robj *o, int type) {
     if (o->type != type) {
         addReply(c,shared.wrongtypeerr);
@@ -353,6 +444,10 @@ int checkType(redisClient *c, robj *o, int type) {
     return 0;
 }
 
+/*
+ * 检查对象o中的值能否表示为long long类型：
+ * -可以则返回
+ */
 int isObjectRepresentableAsLongLong(robj *o, long long *llval) {
     redisAssertWithInfo(NULL,o,o->type == REDIS_STRING);
     if (o->encoding == REDIS_ENCODING_INT) {
